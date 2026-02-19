@@ -25,6 +25,7 @@ class hse_panel extends HTMLElement {
     this._render();
   }
 
+
   async _render() {
     if (!this._root) return;
     const container = this._root.querySelector(".hse_card");

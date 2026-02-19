@@ -15,8 +15,9 @@ from .const import (
     PANEL_TITLE,
     PANEL_ICON,
     PANEL_ELEMENT_NAME,
-    PANEL_HTML_URL,
+    PANEL_JS_URL,
 )
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_register_unified_api(hass)
@@ -36,10 +37,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         config={
             "_panel_custom": {
                 "name": PANEL_ELEMENT_NAME,
-                "html_url": PANEL_HTML_URL,
+                "js_url": PANEL_JS_URL,
             }
         },
     )
+
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
     return True

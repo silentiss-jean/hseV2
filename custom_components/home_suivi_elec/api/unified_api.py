@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from homeassistant.components.http import HomeAssistantView
 
-from ..const import API_PREFIX, PANEL_MODULE_URL, PANEL_TITLE, STATIC_URL
+from ..const import (
+    API_PREFIX,
+    PANEL_TITLE,
+    PANEL_ELEMENT_NAME,
+    PANEL_JS_URL,
+    STATIC_URL,
+)
 
 VERSION = "0.1.0"
 
@@ -28,15 +34,14 @@ class FrontendManifestView(HomeAssistantView):
                 "version": VERSION,
                 "panel": {
                     "title": PANEL_TITLE,
-                    "module_url": PANEL_MODULE_URL,
+                    "element_name": PANEL_ELEMENT_NAME,
+                    "js_url": PANEL_JS_URL,
                 },
-                "static": {
-                    "url": STATIC_URL
-                },
+                "static": {"url": STATIC_URL},
                 "features": {
                     "scan": False,
                     "auto_select": False,
-                    "cost_preview": False
+                    "cost_preview": False,
                 },
             }
         )
@@ -45,4 +50,3 @@ class FrontendManifestView(HomeAssistantView):
 def async_register_unified_api(hass) -> None:
     hass.http.register_view(PingView())
     hass.http.register_view(FrontendManifestView())
-
