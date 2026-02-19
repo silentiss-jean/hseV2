@@ -36,7 +36,8 @@ class EntitiesScanView(HomeAssistantView):
         exclude_hse = _q_bool(request, "exclude_hse", True)
 
         ent_reg = er.async_get(hass)
-        reg_by_entity_id = ent_reg.entities  # map entity_id -> registry entry [page:2]
+        reg_by_entity_id = ent_reg.entities  # map entity_id -> registry entry
+
 
         candidates: list[dict] = []
         integration_counts: dict[str, dict[str, int]] = {}
