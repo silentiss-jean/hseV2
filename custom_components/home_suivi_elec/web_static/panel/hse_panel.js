@@ -1,7 +1,5 @@
 /* hse_panel.js - Home Suivi Elec v2 (JS-only panel) */
-/* build_signature: 2026-02-19_1356 */
-
-const build_signature = "2026-02-19_1356";
+const build_signature = "2026-02-19_1400";
 
 const css_text = `
   :host {
@@ -73,6 +71,8 @@ const css_text = `
     background: rgba(0,0,0,0.25);
     overflow: auto;
     max-height: 420px;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 `;
 
@@ -81,129 +81,142 @@ class hse_panel extends HTMLElement {
     super();
     this._hass = null;
     this._panel = null;
-    this._root = null;
 
-    this._last_render_key = "";
-    this._cached_manifest = null;
-    this._cached_ping = null;
-    this._cached_error = null;
+    this._root = null;
+    this._els = null;
+
+    this._manifest = null;
+    this._ping = null;
+    this._error = null;
   }
 
   set hass(hass) {
     this._hass = hass;
-    this._render();
+    this._update_view();
   }
 
   set panel(panel) {
     this._panel = panel;
-    this._render();
+    this._update_view();
   }
 
   connectedCallback() {
     if (this._root) return;
 
-    // Signature utile pour vérifier que le bon fichier est chargé
-    try {
-      // eslint-disable-next-line no-console
-      console.info(`[HSE] panel loaded (${build_signature})`);
-    } catch (_) {}
+    console.info(`[HSE] panel loaded (${build_signature})`);
+    window.__hse_panel_loaded = build_signature;
 
     this._root = this.attachShadow({ mode: "open" });
-    this._root.innerHTML = `<style>${css_text}</style><div class="hse_card"></div>`;
-    this._render();
+
+    const style = document.createElement("style");
+    style.textContent = css_text;
+
+    const card = document.createElement("div");
+    card.className = "hse_card";
+
+    const title = document.createElement("div");
+    title.className = "hse_title";
+    title.textContent = "Home Suivi Elec";
+
+    const row = document.createElement("div");
+    row.className = "hse_row";
+
+    const badge_build = document.createElement("span");
+    badge_build.className = "hse_badge";
+    badge_build.textContent = `build: ${build_signature}`;
+
+    const badge_hass = document.createElement("span");
+    badge_hass.className = "hse_badge";
+    badge_hass.textContent = "hass: en attente";
+
+    const badge_user = document.createElement("span");
+    badge_user.className = "hse_badge";
+    badge_user.textContent = "user: —";
+
+    row.appendChild(badge_build);
+    row.appendChild(badge_hass);
+    row.appendChild(badge_user);
+
+    const row_actions = document.createElement("div");
+    row_actions.className = "hse_row";
+
+    const btn = document.createElement("button");
+    btn.className = "hse_button";
+    btn.textContent = "Rafraîchir";
+    btn.addEventListener("click", () => this._refresh());
+
+    const status = document.createElement("div");
+    status.className = "hse_muted";
+    status.textContent = "Prêt.";
+
+    row_actions.appendChild(btn);
+    row_actions.appendChild(status);
+
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify({ hint: "Clique sur Rafraîchir pour appeler l'API." }, null, 2);
+
+    card.appendChild(title);
+    card.appendChild(row);
+    card.appendChild(row_actions);
+    card.appendChild(pre);
+
+    this._root.appendChild(style);
+    this._root.appendChild(card);
+
+    this._els = { title, badge_hass, badge_user, status, pre };
+    this._update_view();
   }
 
-  _render() {
-    if (!this._root) return;
-    const container = this._root.querySelector(".hse_card");
-    if (!container) return;
+  _update_view() {
+    if (!this._els) return;
 
-    const hass_ready = !!this._hass;
-    const user_name = this._hass?.user?.name || null;
+    const hass_ok = !!this._hass;
+    const user_name = this._hass?.user?.name || "—";
 
-    const render_key = JSON.stringify({
-      hass_ready,
-      user_name,
-      has_manifest: !!this._cached_manifest,
-      has_ping: !!this._cached_ping,
-      has_error: !!this._cached_error,
-    });
+    this._els.badge_hass.textContent = `hass: ${hass_ok ? "ok" : "en attente"}`;
+    this._els.badge_user.textContent = `user: ${user_name}`;
 
-    if (render_key === this._last_render_key) return;
-    this._last_render_key = render_key;
-
-    const title = this._cached_manifest?.panel?.title || "Home Suivi Elec";
-
-    container.innerHTML = `
-      <div class="hse_title">${title}</div>
-      <div class="hse_row">
-        <span class="hse_badge">build: ${build_signature}</span>
-        <span class="hse_badge">hass: ${hass_ready ? "ok" : "en attente"}</span>
-        <span class="hse_badge">user: ${user_name ? user_name : "—"}</span>
-      </div>
-
-      <div class="hse_row">
-        <button class="hse_button" id="hse_btn_refresh">Rafraîchir</button>
-        <div class="hse_muted" id="hse_status">${this._status_text()}</div>
-      </div>
-
-      ${this._details_block()}
-    `;
-
-    const btn = container.querySelector("#hse_btn_refresh");
-    if (btn) btn.addEventListener("click", () => this._refresh());
-  }
-
-  _status_text() {
-    if (this._cached_error) return "Erreur API (voir détails).";
-    if (!this._hass) return "En attente de hass (auth).";
-    if (!this._cached_manifest && !this._cached_ping) return "Prêt. Clique sur Rafraîchir.";
-    return "OK.";
-  }
-
-  _details_block() {
-    if (this._cached_error) {
-      return `<pre>${this._safe_json({ error: String(this._cached_error) })}</pre>`;
+    if (this._error) {
+      this._els.status.textContent = "Erreur API.";
+      this._els.pre.textContent = JSON.stringify({ error: String(this._error) }, null, 2);
+      return;
     }
 
-    if (this._cached_manifest || this._cached_ping) {
-      return `<pre>${this._safe_json({ manifest: this._cached_manifest, ping: this._cached_ping })}</pre>`;
+    if (this._manifest || this._ping) {
+      const title = this._manifest?.panel?.title || "Home Suivi Elec";
+      this._els.title.textContent = title;
+      this._els.status.textContent = "OK.";
+      this._els.pre.textContent = JSON.stringify({ manifest: this._manifest, ping: this._ping }, null, 2);
+      return;
     }
 
-    return `<pre>${this._safe_json({ hint: "Clique sur Rafraîchir pour appeler l'API." })}</pre>`;
-  }
-
-  _safe_json(obj) {
-    try {
-      return JSON.stringify(obj, null, 2);
-    } catch (err) {
-      return String(err);
+    if (!hass_ok) {
+      this._els.status.textContent = "En attente de hass (auth).";
+      return;
     }
+
+    this._els.status.textContent = "Prêt. Clique sur Rafraîchir.";
   }
 
   async _refresh() {
-    this._cached_error = null;
-    this._cached_manifest = null;
-    this._cached_ping = null;
-    this._last_render_key = "";
-    this._render();
+    this._error = null;
+    this._manifest = null;
+    this._ping = null;
+    this._update_view();
 
     if (!this._hass) {
-      this._cached_error = "hass non disponible (panel non initialisé par HA).";
-      this._last_render_key = "";
-      this._render();
+      this._error = "hass non disponible.";
+      this._update_view();
       return;
     }
 
     try {
-      // callApi prend un path sans /api/ (ex: 'hassio/backups') [page:2]
-      this._cached_manifest = await this._hass.callApi("GET", "home_suivi_elec/unified/frontend_manifest");
-      this._cached_ping = await this._hass.callApi("GET", "home_suivi_elec/unified/ping");
+      this._manifest = await this._hass.callApi("GET", "home_suivi_elec/unified/frontend_manifest");
+      this._ping = await this._hass.callApi("GET", "home_suivi_elec/unified/ping");
     } catch (err) {
-      this._cached_error = err?.message || String(err);
+      this._error = err?.message || String(err);
     } finally {
-      this._last_render_key = "";
-      this._render();
+      this._update_view();
     }
   }
 }
