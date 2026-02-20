@@ -72,7 +72,6 @@ const build_signature = "2026-02-19_1720_modular";
       // css
       const css = await window.hse_loader.load_css_text(`${base}/shared/styles/tokens.css?v=0.1.0`);
       this._root.innerHTML = `<style>${css}</style><div id="root"></div>`;
-
       this._render();
     }
 
@@ -123,7 +122,7 @@ const build_signature = "2026-02-19_1720_modular";
         this._render();
 
         try {
-          this._overview_data = await window.hse_overview_api.fetch_manifest_and_ping(this._hass); // hass.callApi [page:1]
+          this._overview_data = await window.hse_overview_api.fetch_manifest_and_ping(this._hass);
         } catch (err) {
           this._overview_data = { error: err?.message || String(err) };
         }
