@@ -34,7 +34,6 @@
       groups.push({ integration_domain, items, counts });
     }
     groups.sort((a, b) => {
-      // tri: total desc, puis nom asc
       if (b.counts.total !== a.counts.total) return b.counts.total - a.counts.total;
       return a.integration_domain.localeCompare(b.integration_domain);
     });
@@ -129,7 +128,7 @@
     summary.appendChild(badges);
     card.appendChild(summary);
 
-    // Tableau intégrations (garde l’info synthétique)
+    // Tableau intégrations
     const integ_title = el("div", "hse_section_title", `Intégrations détectées`);
     card.appendChild(integ_title);
 
@@ -181,9 +180,9 @@
       details.appendChild(summary_el);
       details.appendChild(body);
 
-      // Lazy load + persist open/close
+      // Persist open/close WITHOUT forcing a full panel rerender
       details.addEventListener("toggle", () => {
-        on_action("set_group_open", { id: g.integration_domain, open: details.open });
+        on_action("set_group_open", { id: g.integration_domain, open: details.open, no_render: true });
 
         if (!details.open) return;
         if (body.dataset.loaded === "true") return;
@@ -191,7 +190,6 @@
         _render_candidate_list(body, g.items);
       });
 
-      // Si ouvert au rendu initial, on charge immédiatement
       if (details.open) {
         body.dataset.loaded = "true";
         _render_candidate_list(body, g.items);
