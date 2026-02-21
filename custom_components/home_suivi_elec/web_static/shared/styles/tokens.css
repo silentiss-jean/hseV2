@@ -22,6 +22,10 @@
 /* Plein écran du panel (dans le host web component)
    - applique le fond du thème sur toute la surface
    - applique le fond dynamique en overlay (sans assombrir artificiellement)
+
+   IMPORTANT:
+   - On évite position:fixed sur ::before (peut créer des bugs d'event/stacking dans certains navigateurs/contexts)
+   - On rend l'overlay en absolute dans .hse_page
 */
 .hse_page {
   min-height: 100vh;
@@ -29,27 +33,16 @@
   color: var(--hse_fg);
   box-sizing: border-box;
 
+  position: relative;
+  isolation: isolate; /* force un stacking context sain */
+
   /* Base */
   background-color: var(--hse-bg);
-
-  /* Overlay dynamique: si opacity=0 => invisible */
-  background-image: var(--hse-bg-dynamic);
-  background-repeat: no-repeat;
-  background-size: cover;
-  background-attachment: fixed;
-
-  opacity: 1;
-}
-
-/* Astuce: on met le fond dynamique sur un pseudo-élément pour contrôler l'opacité
-   sans impacter le contenu (texte, cards, etc.). */
-.hse_page {
-  position: relative;
 }
 
 .hse_page::before {
   content: "";
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: -1;
 
@@ -57,11 +50,8 @@
   background-image: var(--hse-bg-dynamic);
   background-repeat: no-repeat;
   background-size: cover;
-  background-attachment: fixed;
 
   opacity: var(--hse-bg-dynamic-opacity);
-
-  /* IMPORTANT: éviter de capturer les clics si le stacking context change */
   pointer-events: none;
 }
 
