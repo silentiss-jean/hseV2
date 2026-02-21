@@ -13,11 +13,45 @@
 }
 
 
-.hse_page { padding: 16px; color: var(--hse_fg); box-sizing: border-box; }
+/* Plein écran du panel (dans le host web component)
+   - applique le fond du thème sur toute la surface
+   - gère le fond dynamique via --hse-bg-dynamic-opacity
+*/
+.hse_page {
+  min-height: 100vh;
+  padding: 16px;
+  color: var(--hse_fg);
+  box-sizing: border-box;
+
+  background-color: var(--hse-bg);
+  background-image:
+    linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0)),
+    var(--hse-bg-dynamic);
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-attachment: fixed;
+}
+
+/* opacité du fond dynamique (si 0 => on ne l'affiche pas) */
+:host {
+  --hse-bg-dynamic-opacity: var(--hse-bg-dynamic-opacity, 0.55);
+}
+
+.hse_page {
+  /* applique l'opacité au fond dynamique sans casser --hse-bg */
+  background-image:
+    linear-gradient(
+      rgba(0,0,0, calc(1 - var(--hse-bg-dynamic-opacity))),
+      rgba(0,0,0, calc(1 - var(--hse-bg-dynamic-opacity)))
+    ),
+    var(--hse-bg-dynamic);
+}
+
+
 .hse_shell { max-width: 1200px; margin: 0 auto; }
 .hse_header { display:flex; justify-content:space-between; gap:var(--hse_gap); align-items:center; }
 .hse_title { margin:0; font-size:20px; }
-.hse_subtitle { margin:2px 0 0 0; font-size:13px; color:var(--hse_muted); }
+.hse_subtitle { margin:2px 0 0 0; font-size:13px; color: var(--hse_muted); }
 
 .hse_tabs { display:flex; flex-wrap:wrap; gap:8px; margin: 12px 0; }
 .hse_tab { border:1px solid var(--hse_border); background:transparent; color:inherit; border-radius:999px; padding:8px 10px; cursor:pointer; font-size:13px; }
