@@ -32,7 +32,12 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
       this._overview_data = null;
 
       this._scan_result = { integrations: [], candidates: [] };
-      this._scan_state = { scan_running: false, filter_q: "" };
+      this._scan_state = {
+        scan_running: false,
+        filter_q: "",
+        groups_open: {},
+        open_all: false,
+      };
 
       this._boot_done = false;
       this._boot_error = null;
@@ -69,6 +74,13 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
 
       const saved_tab = this._storage_get("hse_active_tab");
       if (saved_tab) this._active_tab = saved_tab;
+
+      // Scan UI state persistence (optionnel mais utile)
+      try {
+        const raw = this._storage_get("hse_scan_groups_open");
+        if (raw) this._scan_state.groups_open = JSON.parse(raw) || {};
+      } catch (_) {}
+      this._scan_state.open_all = (this._storage_get("hse_scan_open_all") || "0") === "1";
 
       this._root = this.attachShadow({ mode: "open" });
       this._boot();
@@ -341,6 +353,31 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       window.hse_scan_view.render_scan(container, this._scan_result, this._scan_state, async (action, value) => {
         if (action === "filter") {
           this._scan_state.filter_q = value || "";
+          this._render();
+          return;
+        }
+
+        if (action === "set_group_open") {
+          const { id, open } = value || {};
+          if (id) {
+            this._scan_state.groups_open[id] = !!open;
+            this._storage_set("hse_scan_groups_open", JSON.stringify(this._scan_state.groups_open));
+          }
+          this._render();
+          return;
+        }
+
+        if (action === "open_all") {
+          this._scan_state.open_all = true;
+          this._storage_set("hse_scan_open_all", "1");
+          this._render();
+          return;
+        }
+
+        if (action === "close_all") {
+          this._scan_state.open_all = false;
+          this._storage_set("hse_scan_open_all", "0");
+          // on garde groups_open mais on laisse l'UI fermer (open_all prévaut)
           this._render();
           return;
         }
