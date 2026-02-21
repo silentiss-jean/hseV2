@@ -23,18 +23,31 @@
     const row = el("div", "hse_toolbar");
 
     const select = document.createElement("select");
+    // IMPORTANT: les styles définissent .hse_input sur des <input>,
+    // mais on l'utilise aussi ici pour un <select>.
+    // Certains navigateurs / resets (ou CSS existant) peuvent masquer un select stylé.
+    // On force un minimum de rendu natif fiable.
     select.className = "hse_input";
+    select.style.display = "inline-block";
+    select.style.visibility = "visible";
+    select.style.pointerEvents = "auto";
+    select.style.minWidth = "220px";
+
     for (const t of THEMES) {
       const opt = document.createElement("option");
       opt.value = t.key;
       opt.textContent = t.label;
       select.appendChild(opt);
     }
+
     select.value = state.theme || "dark";
     select.addEventListener("change", (ev) => on_action("set_theme", ev.target.value));
 
     row.appendChild(select);
     card.appendChild(row);
+
+    // Affichage debug (sans dépendre du rendu du select)
+    card.appendChild(el("div", "hse_subtitle", `Thème actuel: ${state.theme || "dark"}`));
 
     // Toggles simples (optionnels)
     const toggles = el("div", "hse_badges");
