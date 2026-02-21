@@ -75,7 +75,7 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
       const saved_tab = this._storage_get("hse_active_tab");
       if (saved_tab) this._active_tab = saved_tab;
 
-      // Scan UI state persistence (optionnel mais utile)
+      // Scan UI state persistence
       try {
         const raw = this._storage_get("hse_scan_groups_open");
         if (raw) this._scan_state.groups_open = JSON.parse(raw) || {};
@@ -103,7 +103,6 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
     async _boot() {
       if (this._boot_done) return;
 
-      // Loader minimal inline fallback
       if (!window.hse_loader) {
         window.hse_loader = {
           load_script_once: (url) =>
@@ -124,27 +123,22 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
       }
 
       try {
-        // shared libs
         await window.hse_loader.load_script_once(`${SHARED_BASE}/ui/dom.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${SHARED_BASE}/ui/table.js?v=${ASSET_V}`);
 
-        // core
         await window.hse_loader.load_script_once(`${PANEL_BASE}/core/shell.js?v=${ASSET_V}`);
 
-        // features
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/overview/overview.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/overview/overview.view.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.view.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/custom/custom.view.js?v=${ASSET_V}`);
 
-        // CSS (shadow-ready)
         const css_tokens = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_tokens.shadow.css?v=${ASSET_V}`);
         const css_themes = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_themes.shadow.css?v=${ASSET_V}`);
         const css_alias = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_alias.v2.css?v=${ASSET_V}`);
         const css_panel = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/tokens.css?v=${ASSET_V}`);
 
-        // IMPORTANT: fermer <style> ET créer #root
         this._root.innerHTML = `<style>
 ${css_tokens}
 
@@ -198,8 +192,6 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
     }
 
     _set_active_tab(tab_id) {
-      // IMPORTANT: ne pas changer d'onglet si un scan est en cours (évite état incohérent)
-      // mais ne doit pas bloquer la navigation une fois fini.
       this._active_tab = tab_id;
       this._storage_set("hse_active_tab", tab_id);
       this._render();
@@ -270,7 +262,6 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       for (const it of this._get_nav_items()) {
         const b = el("button", "hse_tab", it.label);
         b.dataset.active = it.id === this._active_tab ? "true" : "false";
-        // Si scan en cours, on désactive juste l'onglet scan? non. on laisse tout actif.
         b.addEventListener("click", () => this._set_active_tab(it.id));
         this._ui.tabs.appendChild(b);
       }
@@ -361,12 +352,12 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         }
 
         if (action === "set_group_open") {
-          const { id, open } = value || {};
+          const { id, open, no_render } = value || {};
           if (id) {
             this._scan_state.groups_open[id] = !!open;
             this._storage_set("hse_scan_groups_open", JSON.stringify(this._scan_state.groups_open));
           }
-          this._render();
+          if (!no_render) this._render();
           return;
         }
 
