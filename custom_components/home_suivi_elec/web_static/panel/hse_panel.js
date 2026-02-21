@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-21_1230_theme_css_concat";
+const build_signature = "2026-02-21_1316_full_custom_theme";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // Bump pour casser le cache des assets chargés par le loader
-  const ASSET_V = "0.1.1";
+  const ASSET_V = "0.1.2";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -36,8 +36,12 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
       this._boot_done = false;
       this._boot_error = null;
 
-      // customisation state
       this._theme = "dark";
+      this._custom_state = {
+        theme: "dark",
+        dynamic_bg: true,
+        glass: false,
+      };
     }
 
     set hass(hass) {
@@ -51,29 +55,46 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
       console.info(`[HSE] entry loaded (${build_signature})`);
       window.__hse_panel_loaded = build_signature;
 
-      // Theme: appliqué au host (shadow-ready via :host([data-theme="..."]))
-      try {
-        this._theme = window.localStorage.getItem("hse_theme") || "dark";
-      } catch (_) {
-        this._theme = "dark";
-      }
+      // Theme (host attribute => CSS :host([data-theme="..."]) )
+      this._theme = this._storage_get("hse_theme") || "dark";
       this.setAttribute("data-theme", this._theme);
+
+      // Restore custom toggles (optional)
+      this._custom_state.theme = this._theme;
+      this._custom_state.dynamic_bg = (this._storage_get("hse_custom_dynamic_bg") || "1") === "1";
+      this._custom_state.glass = (this._storage_get("hse_custom_glass") || "0") === "1";
+
+      // Apply overrides for toggles (host-level overrides; "" => revert to theme default)
+      this._apply_dynamic_bg_override();
+      this._apply_glass_override();
 
       this._root = this.attachShadow({ mode: "open" });
 
-      // restore last tab (best effort)
-      try {
-        const saved = window.localStorage.getItem("hse_active_tab");
-        if (saved) this._active_tab = saved;
-      } catch (_) {}
+      // Restore last tab
+      const saved_tab = this._storage_get("hse_active_tab");
+      if (saved_tab) this._active_tab = saved_tab;
 
       this._boot();
+    }
+
+    _storage_get(key) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    _storage_set(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch (_) {}
     }
 
     async _boot() {
       if (this._boot_done) return;
 
-      // Fallback loader (si core/loader.js n'est pas utilisé)
+      // Loader minimal inline fallback
       if (!window.hse_loader) {
         window.hse_loader = {
           load_script_once: (url) =>
@@ -101,30 +122,29 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
         // core
         await window.hse_loader.load_script_once(`${PANEL_BASE}/core/shell.js?v=${ASSET_V}`);
 
-        // features (existantes)
+        // features
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/overview/overview.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/overview/overview.view.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.view.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/custom/custom.view.js?v=${ASSET_V}`);
 
         // CSS (shadow-ready)
         const css_tokens = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_tokens.shadow.css?v=${ASSET_V}`);
         const css_themes = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_themes.shadow.css?v=${ASSET_V}`);
         const css_alias = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_alias.v2.css?v=${ASSET_V}`);
-
-        // CSS panel v2 (tes classes hse_*)
         const css_panel = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/tokens.css?v=${ASSET_V}`);
 
         // IMPORTANT: injecter le CSS + root container
         this._root.innerHTML = `<style>
-        ${css_tokens}
+${css_tokens}
 
-        ${css_themes}
+${css_themes}
 
-        ${css_alias}
+${css_alias}
 
-        ${css_panel}
-        </style><div id="root"></div>`;
+${css_panel}
+</style><div id="root"></div>`;
 
         this._boot_done = true;
         this._boot_error = null;
@@ -132,17 +152,15 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
         this._boot_error = err?.message || String(err);
         console.error("[HSE] boot error", err);
 
-        this._root.innerHTML = `
-          <style>
-            :host{display:block;padding:16px;font-family:system-ui;color:var(--primary-text-color);}
-            pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding:12px;border-radius:10px;}
-          </style>
-          <div>
-            <div style="font-size:18px">Home Suivi Elec</div>
-            <div style="opacity:.8">Boot error</div>
-            <pre>${this._escape_html(this._boot_error)}</pre>
-          </div>
-        `;
+        this._root.innerHTML = `<style>
+:host{display:block;padding:16px;font-family:system-ui;color:var(--primary-text-color);}
+pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding:12px;border-radius:10px;}
+</style>
+<div>
+  <div style="font-size:18px">Home Suivi Elec</div>
+  <div style="opacity:.8">Boot error</div>
+  <pre>${this._escape_html(this._boot_error)}</pre>
+</div>`;
       } finally {
         this._render();
       }
@@ -172,20 +190,28 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
 
     _set_active_tab(tab_id) {
       this._active_tab = tab_id;
-      try {
-        window.localStorage.setItem("hse_active_tab", tab_id);
-      } catch (_) {}
+      this._storage_set("hse_active_tab", tab_id);
       this._render();
     }
 
-    // Exposé pour l’onglet Customisation plus tard
     _set_theme(theme_key) {
       this._theme = theme_key || "dark";
+      this._custom_state.theme = this._theme;
+
       this.setAttribute("data-theme", this._theme);
-      try {
-        window.localStorage.setItem("hse_theme", this._theme);
-      } catch (_) {}
+      this._storage_set("hse_theme", this._theme);
+
       this._render();
+    }
+
+    _apply_dynamic_bg_override() {
+      // "" => revert theme value, "0" => disable dynamic background
+      this.style.setProperty("--hse-bg-dynamic-opacity", this._custom_state.dynamic_bg ? "" : "0");
+    }
+
+    _apply_glass_override() {
+      // "" => revert theme value, otherwise force a glass filter
+      this.style.setProperty("--hse-backdrop-filter", this._custom_state.glass ? "blur(18px) saturate(160%)" : "");
     }
 
     _render() {
@@ -205,8 +231,6 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
       this._ui.header_right.textContent = `user: ${user_name}`;
 
       this._ensure_valid_tab();
-
-      // Force un rendu multi-pages sans dépendre d’une version spécifique de shell.js
       this._render_nav_tabs();
 
       window.hse_dom.clear(this._ui.content);
@@ -226,28 +250,27 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
           return;
 
         case "custom":
-          // Placeholder pour l’instant (on branchera la vue custom ensuite)
-          this._render_placeholder("Customisation", `Thème actuel: ${this._theme}`);
+          this._render_custom();
           return;
 
         case "diagnostic":
-          this._render_placeholder("Diagnostic", "À venir : logs, cohérence, health-check, cache.");
+          this._render_placeholder("Diagnostic", "À venir.");
           return;
 
         case "config":
-          this._render_placeholder("Configuration", "À venir : tarifs, options, capteurs runtime.");
+          this._render_placeholder("Configuration", "À venir.");
           return;
 
         case "cards":
-          this._render_placeholder("Génération cartes", "À venir : génération Lovelace + preview/copy.");
+          this._render_placeholder("Génération cartes", "À venir.");
           return;
 
         case "migration":
-          this._render_placeholder("Migration capteurs", "À venir : utility_meter/template export + création auto.");
+          this._render_placeholder("Migration capteurs", "À venir.");
           return;
 
         case "costs":
-          this._render_placeholder("Analyse de coûts", "À venir : vues jour/semaine/mois + comparaisons.");
+          this._render_placeholder("Analyse de coûts", "À venir.");
           return;
 
         default:
@@ -274,6 +297,39 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
       card.appendChild(el("div", null, title));
       card.appendChild(el("div", "hse_subtitle", subtitle || "À venir."));
       this._ui.content.appendChild(card);
+    }
+
+    _render_custom() {
+      const container = this._ui.content;
+
+      if (!window.hse_custom_view?.render_customisation) {
+        this._render_placeholder("Customisation", "custom.view.js non chargé.");
+        return;
+      }
+
+      window.hse_custom_view.render_customisation(container, this._custom_state, (action, value) => {
+        if (action === "set_theme") {
+          const theme = value || "dark";
+          this._set_theme(theme);
+          return;
+        }
+
+        if (action === "toggle_dynamic_bg") {
+          this._custom_state.dynamic_bg = !this._custom_state.dynamic_bg;
+          this._storage_set("hse_custom_dynamic_bg", this._custom_state.dynamic_bg ? "1" : "0");
+          this._apply_dynamic_bg_override();
+          this._render();
+          return;
+        }
+
+        if (action === "toggle_glass") {
+          this._custom_state.glass = !this._custom_state.glass;
+          this._storage_set("hse_custom_glass", this._custom_state.glass ? "1" : "0");
+          this._apply_glass_override();
+          this._render();
+          return;
+        }
+      });
     }
 
     async _render_overview() {
