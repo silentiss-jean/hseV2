@@ -6,7 +6,8 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // Bump pour casser le cache (scripts + css)
-  const ASSET_V = "0.1.4";
+  // IMPORTANT: doit matcher le cache-buster backend (const.py PANEL_JS_URL)
+  const ASSET_V = "0.1.8";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
