@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-21_1316_full_custom_theme";
+const build_signature = "2026-02-21_1454_fix_theme_apply";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
-  // Bump pour casser le cache des assets chargés par le loader
-  const ASSET_V = "0.1.2";
+  // Bump pour casser le cache (scripts + css)
+  const ASSET_V = "0.1.3";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -55,25 +55,22 @@ const build_signature = "2026-02-21_1316_full_custom_theme";
       console.info(`[HSE] entry loaded (${build_signature})`);
       window.__hse_panel_loaded = build_signature;
 
-      // Theme (host attribute => CSS :host([data-theme="..."]) )
+      // Theme (appliqué au host => :host([data-theme="..."]))
       this._theme = this._storage_get("hse_theme") || "dark";
-      this.setAttribute("data-theme", this._theme);
-
-      // Restore custom toggles (optional)
       this._custom_state.theme = this._theme;
+
       this._custom_state.dynamic_bg = (this._storage_get("hse_custom_dynamic_bg") || "1") === "1";
       this._custom_state.glass = (this._storage_get("hse_custom_glass") || "0") === "1";
 
-      // Apply overrides for toggles (host-level overrides; "" => revert to theme default)
+      this.setAttribute("data-theme", this._theme);
       this._apply_dynamic_bg_override();
       this._apply_glass_override();
-
-      this._root = this.attachShadow({ mode: "open" });
 
       // Restore last tab
       const saved_tab = this._storage_get("hse_active_tab");
       if (saved_tab) this._active_tab = saved_tab;
 
+      this._root = this.attachShadow({ mode: "open" });
       this._boot();
     }
 
@@ -133,9 +130,11 @@ const build_signature = "2026-02-21_1316_full_custom_theme";
         const css_tokens = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_tokens.shadow.css?v=${ASSET_V}`);
         const css_themes = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_themes.shadow.css?v=${ASSET_V}`);
         const css_alias = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_alias.v2.css?v=${ASSET_V}`);
+
+        // CSS panel (tes classes .hse_*)
         const css_panel = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/tokens.css?v=${ASSET_V}`);
 
-        // IMPORTANT: injecter le CSS + root container
+        // IMPORTANT: <style> + #root
         this._root.innerHTML = `<style>
 ${css_tokens}
 
@@ -205,12 +204,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
     }
 
     _apply_dynamic_bg_override() {
-      // "" => revert theme value, "0" => disable dynamic background
       this.style.setProperty("--hse-bg-dynamic-opacity", this._custom_state.dynamic_bg ? "" : "0");
     }
 
     _apply_glass_override() {
-      // "" => revert theme value, otherwise force a glass filter
       this.style.setProperty("--hse-backdrop-filter", this._custom_state.glass ? "blur(18px) saturate(160%)" : "");
     }
 
@@ -218,7 +215,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       if (!this._root) return;
 
       const root = this._root.querySelector("#root");
-      if (!root) return; // boot KO -> fallback affiché
+      if (!root) return;
 
       if (!window.hse_shell || !window.hse_dom) return;
 
@@ -244,37 +241,14 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         case "overview":
           this._render_overview();
           return;
-
         case "scan":
           this._render_scan();
           return;
-
         case "custom":
           this._render_custom();
           return;
-
-        case "diagnostic":
-          this._render_placeholder("Diagnostic", "À venir.");
-          return;
-
-        case "config":
-          this._render_placeholder("Configuration", "À venir.");
-          return;
-
-        case "cards":
-          this._render_placeholder("Génération cartes", "À venir.");
-          return;
-
-        case "migration":
-          this._render_placeholder("Migration capteurs", "À venir.");
-          return;
-
-        case "costs":
-          this._render_placeholder("Analyse de coûts", "À venir.");
-          return;
-
         default:
-          this._render_placeholder("Page", `Route inconnue: ${this._active_tab}`);
+          this._render_placeholder("Page", "À venir.");
       }
     }
 
@@ -284,6 +258,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
 
       for (const it of this._get_nav_items()) {
         const b = el("button", "hse_tab", it.label);
+        // IMPORTANT: dataset.active => data-active (pas data_active)
         b.dataset.active = it.id === this._active_tab ? "true" : "false";
         b.addEventListener("click", () => this._set_active_tab(it.id));
         this._ui.tabs.appendChild(b);
@@ -292,7 +267,6 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
 
     _render_placeholder(title, subtitle) {
       const { el } = window.hse_dom;
-
       const card = el("div", "hse_card");
       card.appendChild(el("div", null, title));
       card.appendChild(el("div", "hse_subtitle", subtitle || "À venir."));
@@ -309,8 +283,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
 
       window.hse_custom_view.render_customisation(container, this._custom_state, (action, value) => {
         if (action === "set_theme") {
-          const theme = value || "dark";
-          this._set_theme(theme);
+          this._set_theme(value || "dark");
           return;
         }
 
@@ -343,13 +316,11 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       btn.addEventListener("click", async () => {
         this._overview_data = null;
         this._render();
-
         try {
           this._overview_data = await window.hse_overview_api.fetch_manifest_and_ping(this._hass);
         } catch (err) {
           this._overview_data = { error: err?.message || String(err) };
         }
-
         this._render();
       });
 
@@ -378,7 +349,6 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         if (action === "scan") {
           this._scan_state.scan_running = true;
           this._render();
-
           try {
             this._scan_result = await window.hse_scan_api.fetch_scan(this._hass, {
               include_disabled: false,

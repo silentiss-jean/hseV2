@@ -21,7 +21,7 @@
 
 .hse_tabs { display:flex; flex-wrap:wrap; gap:8px; margin: 12px 0; }
 .hse_tab { border:1px solid var(--hse_border); background:transparent; color:inherit; border-radius:999px; padding:8px 10px; cursor:pointer; font-size:13px; }
-.hse_tab[data_active="true"] { border-color: var(--hse_accent); }
+.hse_tab[data-active="true"] { border-color: var(--hse_accent); }
 
 .hse_card { background:var(--hse_card_bg); border:1px solid var(--hse_border); border-radius:var(--hse_radius); padding:12px; margin:12px 0; }
 .hse_toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 8px 0; }
