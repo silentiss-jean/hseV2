@@ -32,3 +32,68 @@
 .hse_table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
 .hse_table th, .hse_table td { border-top:1px solid var(--hse_border); padding:8px; text-align:left; vertical-align:top; }
 .hse_code { border:1px solid var(--hse_border); border-radius:10px; padding:10px; overflow:auto; max-height:420px; white-space:pre-wrap; word-break:break-word; background: color-mix(in srgb, var(--hse_card_bg) 70%, #000 30%); }
+
+.hse_section_title {
+  margin: 14px 0 6px 0;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  color: var(--hse_muted);
+}
+
+.hse_badges { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.hse_badge {
+  border: 1px solid var(--hse_border);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--hse_muted);
+  background: color-mix(in srgb, var(--hse_card_bg) 85%, #000 15%);
+}
+.hse_badge_warn { border-color: color-mix(in srgb, var(--hse_danger) 55%, var(--hse_border) 45%); }
+
+.hse_summary { margin: 8px 0 12px 0; }
+
+.hse_groups { margin-top: 8px; display: grid; gap: 10px; }
+
+.hse_fold {
+  border: 1px solid var(--hse_border);
+  border-radius: var(--hse_radius);
+  background: color-mix(in srgb, var(--hse_card_bg) 92%, #000 8%);
+  overflow: hidden;
+}
+
+.hse_fold_summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--hse_gap);
+  padding: 10px 12px;
+  user-select: none;
+}
+.hse_fold_summary::-webkit-details-marker { display:none; }
+
+.hse_fold_title { font-size: 14px; }
+
+.hse_fold_body { padding: 10px 12px; border-top: 1px solid var(--hse_border); }
+
+.hse_candidate_list { display: grid; gap: 8px; }
+
+.hse_candidate_row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--hse_gap);
+  padding: 8px 10px;
+  border: 1px solid var(--hse_border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--hse_card_bg) 88%, #000 12%);
+}
+
+.hse_candidate_main { min-width: 0; }
+.hse_candidate_meta { display:flex; align-items:flex-start; }
+
+.hse_mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12.5px;
+}
