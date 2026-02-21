@@ -198,6 +198,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
     }
 
     _set_active_tab(tab_id) {
+      // IMPORTANT: ne pas changer d'onglet si un scan est en cours (évite état incohérent)
+      // mais ne doit pas bloquer la navigation une fois fini.
       this._active_tab = tab_id;
       this._storage_set("hse_active_tab", tab_id);
       this._render();
@@ -268,6 +270,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       for (const it of this._get_nav_items()) {
         const b = el("button", "hse_tab", it.label);
         b.dataset.active = it.id === this._active_tab ? "true" : "false";
+        // Si scan en cours, on désactive juste l'onglet scan? non. on laisse tout actif.
         b.addEventListener("click", () => this._set_active_tab(it.id));
         this._ui.tabs.appendChild(b);
       }
@@ -377,7 +380,6 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         if (action === "close_all") {
           this._scan_state.open_all = false;
           this._storage_set("hse_scan_open_all", "0");
-          // on garde groups_open mais on laisse l'UI fermer (open_all prévaut)
           this._render();
           return;
         }
