@@ -8,5 +8,5 @@ PANEL_TITLE = "Home Suivi Elec"
 PANEL_ICON = "mdi:flash"
 
 
-PANEL_JS_URL = f"{STATIC_URL}/panel/hse_panel.js?v=0.1.5"
+PANEL_JS_URL = f"{STATIC_URL}/panel/hse_panel.js?v=0.1.6"
 PANEL_ELEMENT_NAME = "hse-panel"
