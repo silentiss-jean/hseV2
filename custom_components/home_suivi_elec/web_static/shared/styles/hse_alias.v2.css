@@ -1,0 +1,12 @@
+:host {
+  /* alias v2 -> v1 */
+  --hse_border: var(--hse-border);
+  --hse_muted: var(--hse-text-muted);
+  --hse_card_bg: var(--hse-surface);
+  --hse_danger: var(--hse-error);
+  --hse_accent: var(--hse-accent);
+  --hse_gap: var(--hse-spacing-md);
+
+  /* si tu as besoin */
+  --hse_radius: var(--hse-radius-lg);
+}

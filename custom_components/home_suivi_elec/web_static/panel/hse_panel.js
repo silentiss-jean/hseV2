@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-21_1136_router_multipage";
+const build_signature = "2026-02-21_1230_theme_css_concat";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
-  // Bump ici si tu veux casser le cache de tous les assets chargés par le loader
-  const ASSET_V = "0.1.0";
+  // Bump pour casser le cache des assets chargés par le loader
+  const ASSET_V = "0.1.1";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -22,9 +22,9 @@ const build_signature = "2026-02-21_1136_router_multipage";
   class hse_panel extends HTMLElement {
     constructor() {
       super();
+
       this._hass = null;
       this._root = null;
-
       this._ui = null;
 
       this._active_tab = "overview";
@@ -35,6 +35,9 @@ const build_signature = "2026-02-21_1136_router_multipage";
 
       this._boot_done = false;
       this._boot_error = null;
+
+      // customisation state
+      this._theme = "dark";
     }
 
     set hass(hass) {
@@ -47,6 +50,14 @@ const build_signature = "2026-02-21_1136_router_multipage";
 
       console.info(`[HSE] entry loaded (${build_signature})`);
       window.__hse_panel_loaded = build_signature;
+
+      // Theme: appliqué au host (shadow-ready via :host([data-theme="..."]))
+      try {
+        this._theme = window.localStorage.getItem("hse_theme") || "dark";
+      } catch (_) {
+        this._theme = "dark";
+      }
+      this.setAttribute("data-theme", this._theme);
 
       this._root = this.attachShadow({ mode: "open" });
 
@@ -96,11 +107,24 @@ const build_signature = "2026-02-21_1136_router_multipage";
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.view.js?v=${ASSET_V}`);
 
-        // css
-        const css = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/tokens.css?v=${ASSET_V}`);
+        // CSS (shadow-ready)
+        const css_tokens = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_tokens.shadow.css?v=${ASSET_V}`);
+        const css_themes = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_themes.shadow.css?v=${ASSET_V}`);
+        const css_alias = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_alias.v2.css?v=${ASSET_V}`);
 
-        // IMPORTANT: inject CSS + root container (sinon _render() ne trouve jamais #root)
-        this._root.innerHTML = `<style>${css}</style><div id="root"></div>`;
+        // CSS panel v2 (tes classes hse_*)
+        const css_panel = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/tokens.css?v=${ASSET_V}`);
+
+        // IMPORTANT: injecter le CSS + root container
+        this._root.innerHTML = `<style>
+${css_tokens}
+
+${css_themes}
+
+${css_alias}
+
+${css_panel}
+</style><div id="root"></div>`;
 
         this._boot_done = true;
         this._boot_error = null;
@@ -108,7 +132,6 @@ const build_signature = "2026-02-21_1136_router_multipage";
         this._boot_error = err?.message || String(err);
         console.error("[HSE] boot error", err);
 
-        // UI de fallback (au cas où dom.js n'a pas chargé)
         this._root.innerHTML = `
           <style>
             :host{display:block;padding:16px;font-family:system-ui;color:var(--primary-text-color);}
@@ -135,7 +158,6 @@ const build_signature = "2026-02-21_1136_router_multipage";
     }
 
     _get_nav_items() {
-      // Si tu updates core/shell.js pour exposer get_nav_items(), on l’utilise
       const from_shell = window.hse_shell?.get_nav_items?.();
       if (Array.isArray(from_shell) && from_shell.length) return from_shell;
       return NAV_ITEMS_FALLBACK;
@@ -152,6 +174,16 @@ const build_signature = "2026-02-21_1136_router_multipage";
       this._active_tab = tab_id;
       try {
         window.localStorage.setItem("hse_active_tab", tab_id);
+      } catch (_) {}
+      this._render();
+    }
+
+    // Exposé pour l’onglet Customisation plus tard
+    _set_theme(theme_key) {
+      this._theme = theme_key || "dark";
+      this.setAttribute("data-theme", this._theme);
+      try {
+        window.localStorage.setItem("hse_theme", this._theme);
       } catch (_) {}
       this._render();
     }
@@ -174,8 +206,7 @@ const build_signature = "2026-02-21_1136_router_multipage";
 
       this._ensure_valid_tab();
 
-      // RENDER TABS:
-      // - si shell.js est encore old (2 tabs), on override ici pour forcer le multi-pages
+      // Force un rendu multi-pages sans dépendre d’une version spécifique de shell.js
       this._render_nav_tabs();
 
       window.hse_dom.clear(this._ui.content);
@@ -194,16 +225,17 @@ const build_signature = "2026-02-21_1136_router_multipage";
           this._render_scan();
           return;
 
+        case "custom":
+          // Placeholder pour l’instant (on branchera la vue custom ensuite)
+          this._render_placeholder("Customisation", `Thème actuel: ${this._theme}`);
+          return;
+
         case "diagnostic":
           this._render_placeholder("Diagnostic", "À venir : logs, cohérence, health-check, cache.");
           return;
 
         case "config":
           this._render_placeholder("Configuration", "À venir : tarifs, options, capteurs runtime.");
-          return;
-
-        case "custom":
-          this._render_placeholder("Customisation", "À venir : thème, regroupements, règles.");
           return;
 
         case "cards":
@@ -224,7 +256,6 @@ const build_signature = "2026-02-21_1136_router_multipage";
     }
 
     _render_nav_tabs() {
-      // Force un rendu multi-pages sans dépendre d’une version spécifique de core/shell.js
       const { el, clear } = window.hse_dom;
       clear(this._ui.tabs);
 
