@@ -38,7 +38,6 @@
   background-size: cover;
   background-attachment: fixed;
 
-  /* On ajuste l'intensité sans "teinter" en noir (mieux pour thèmes clairs) */
   opacity: 1;
 }
 
@@ -61,6 +60,9 @@
   background-attachment: fixed;
 
   opacity: var(--hse-bg-dynamic-opacity);
+
+  /* IMPORTANT: éviter de capturer les clics si le stacking context change */
+  pointer-events: none;
 }
 
 
