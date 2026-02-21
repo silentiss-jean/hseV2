@@ -8,11 +8,13 @@
     const shell = el("div", "hse_shell");
 
     const header = el("div", "hse_header");
+
     const left = el("div");
     left.appendChild(el("h1", "hse_title", "Home Suivi Elec"));
     left.appendChild(el("div", "hse_subtitle", "Panel v2 (modulaire)"));
 
     const right = el("div", "hse_subtitle", `user: ${ctx.user_name || "—"}`);
+
     header.appendChild(left);
     header.appendChild(right);
 
@@ -22,21 +24,31 @@
     shell.appendChild(header);
     shell.appendChild(tabs);
     shell.appendChild(content);
+
     page.appendChild(shell);
     root.appendChild(page);
 
     return { tabs, content, header_right: right };
   }
 
+  function get_nav_items() {
+    // ids = routes internes (features)
+    return [
+      { id: "overview", label: "Accueil" },
+      { id: "diagnostic", label: "Diagnostic" },       // placeholder
+      { id: "scan", label: "Détection" },              // ton scan
+      { id: "config", label: "Configuration" },        // placeholder
+      { id: "custom", label: "Customisation" },        // placeholder
+      { id: "cards", label: "Génération cartes" },     // placeholder
+      { id: "migration", label: "Migration capteurs" },// placeholder
+      { id: "costs", label: "Analyse de coûts" },      // placeholder
+    ];
+  }
+
   function render_tabs(tabs_node, active_tab, on_tab) {
     clear(tabs_node);
 
-    const items = [
-      { id: "overview", label: "Aperçu" },
-      { id: "scan", label: "Scan" },
-    ];
-
-    for (const it of items) {
+    for (const it of get_nav_items()) {
       const b = el("button", "hse_tab", it.label);
       b.dataset.active = it.id === active_tab ? "true" : "false";
       b.addEventListener("click", () => on_tab(it.id));
@@ -44,5 +56,5 @@
     }
   }
 
-  window.hse_shell = { create_shell, render_tabs };
+  window.hse_shell = { create_shell, render_tabs, get_nav_items };
 })();
