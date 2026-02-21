@@ -1,15 +1,17 @@
 :host {
+  /* Layout tokens (OK de garder ici) */
   --hse_gap: 12px;
   --hse_radius: 12px;
 
-  --hse_fg: var(--primary-text-color);
-  --hse_muted: var(--secondary-text-color);
-  --hse_border: var(--divider-color);
-  --hse_card_bg: var(--card-background-color);
-
-  --hse_accent: var(--primary-color);
-  --hse_danger: var(--error-color);
+  /* Couleurs: utiliser les tokens HSE (thèmes) + fallback HA */
+  --hse_fg: var(--hse-text, var(--primary-text-color));
+  --hse_muted: var(--hse-text-muted, var(--secondary-text-color));
+  --hse_border: var(--hse-border, var(--divider-color));
+  --hse_card_bg: var(--hse-surface, var(--card-background-color));
+  --hse_accent: var(--hse-primary, var(--primary-color));
+  --hse_danger: var(--hse-error, var(--error-color));
 }
+
 
 .hse_page { padding: 16px; color: var(--hse_fg); box-sizing: border-box; }
 .hse_shell { max-width: 1200px; margin: 0 auto; }

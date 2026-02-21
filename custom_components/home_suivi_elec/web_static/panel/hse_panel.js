@@ -117,14 +117,14 @@ const build_signature = "2026-02-21_1230_theme_css_concat";
 
         // IMPORTANT: injecter le CSS + root container
         this._root.innerHTML = `<style>
-${css_tokens}
+        ${css_tokens}
 
-${css_themes}
+        ${css_themes}
 
-${css_alias}
+        ${css_alias}
 
-${css_panel}
-</style><div id="root"></div>`;
+        ${css_panel}
+        </style><div id="root"></div>`;
 
         this._boot_done = true;
         this._boot_error = null;
