@@ -80,7 +80,7 @@
 
     const card = el("div", "hse_card");
 
-    // Toolbar: Scanner + filtre (conservé en haut)
+    // Toolbar: Scanner + filtre + open/close all
     const toolbar = el("div", "hse_toolbar");
 
     const btn = el("button", "hse_button hse_button_primary", state.scan_running ? "Scan…" : "Scanner");
@@ -93,8 +93,16 @@
     input.value = state.filter_q || "";
     input.addEventListener("input", (ev) => on_action("filter", ev.target.value));
 
+    const btn_open_all = el("button", "hse_button", "Tout ouvrir");
+    btn_open_all.addEventListener("click", () => on_action("open_all"));
+
+    const btn_close_all = el("button", "hse_button", "Tout fermer");
+    btn_close_all.addEventListener("click", () => on_action("close_all"));
+
     toolbar.appendChild(btn);
     toolbar.appendChild(input);
+    toolbar.appendChild(btn_open_all);
+    toolbar.appendChild(btn_close_all);
     card.appendChild(toolbar);
 
     // Erreur API
@@ -138,7 +146,7 @@
     );
     card.appendChild(integ_box);
 
-    // Candidats groupés par intégration, pliés par défaut + lazy render
+    // Candidats groupés par intégration
     const cand_title = el("div", "hse_section_title", "Candidats (groupés par intégration)");
     card.appendChild(cand_title);
 
@@ -147,7 +155,11 @@
 
     for (const g of groups) {
       const details = document.createElement("details");
-      details.className = "hse_fold"; // pas d'attribut open => plié par défaut
+      details.className = "hse_fold";
+
+      // Ouverture contrôlée: open_all prime, sinon on restaure l'état par intégration
+      const wanted_open = state.open_all ? true : !!state.groups_open?.[g.integration_domain];
+      if (wanted_open) details.open = true;
 
       const summary_el = document.createElement("summary");
       summary_el.className = "hse_fold_summary";
@@ -169,19 +181,32 @@
       details.appendChild(summary_el);
       details.appendChild(body);
 
+      // Lazy load + persist open/close
       details.addEventListener("toggle", () => {
+        on_action("set_group_open", { id: g.integration_domain, open: details.open });
+
         if (!details.open) return;
         if (body.dataset.loaded === "true") return;
         body.dataset.loaded = "true";
         _render_candidate_list(body, g.items);
       });
 
+      // Si ouvert au rendu initial, on charge immédiatement
+      if (details.open) {
+        body.dataset.loaded = "true";
+        _render_candidate_list(body, g.items);
+      }
+
       groups_box.appendChild(details);
     }
 
     card.appendChild(groups_box);
 
-    const note = el("div", "hse_subtitle", "Les groupes sont repliés par défaut; la liste se charge à l’ouverture (meilleures perfs).");
+    const note = el(
+      "div",
+      "hse_subtitle",
+      "Les groupes sont repliés par défaut; tu peux ouvrir/fermer individuellement ou via Tout ouvrir/Tout fermer."
+    );
     card.appendChild(note);
 
     container.appendChild(card);
