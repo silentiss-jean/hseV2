@@ -46,9 +46,6 @@
     row.appendChild(select);
     card.appendChild(row);
 
-    // Affichage debug (sans dépendre du rendu du select)
-    card.appendChild(el("div", "hse_subtitle", `Thème actuel: ${state.theme || "dark"}`));
-
     // Toggles simples (optionnels)
     const toggles = el("div", "hse_badges");
 
