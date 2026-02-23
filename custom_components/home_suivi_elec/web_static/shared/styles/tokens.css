@@ -96,6 +96,16 @@
 }
 .hse_badge_warn { border-color: color-mix(in srgb, var(--hse_danger) 55%, var(--hse_border) 45%); }
 
+/* Status badges */
+.hse_badge_status_ok {
+  border-color: color-mix(in srgb, var(--hse_accent) 45%, var(--hse_border) 55%);
+  color: color-mix(in srgb, var(--hse_accent) 60%, var(--hse_muted) 40%);
+}
+.hse_badge_status_warn {
+  border-color: color-mix(in srgb, var(--hse_danger) 45%, var(--hse_border) 55%);
+  color: color-mix(in srgb, var(--hse_danger) 55%, var(--hse_muted) 45%);
+}
+
 .hse_summary { margin: 8px 0 12px 0; }
 
 .hse_groups { margin-top: 8px; display: grid; gap: 10px; }
