@@ -1,3 +1,8 @@
+/*
+HSE_DOC: custom_components/home_suivi_elec/docs/tokens_css.md
+HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data-attribute semantics, update the doc above.
+*/
+
 :host {
   /* Layout tokens (OK de garder ici) */
   --hse_gap: 12px;
