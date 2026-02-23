@@ -1,3 +1,8 @@
+/*
+HSE_DOC: custom_components/home_suivi_elec/docs/dom_js.md
+HSE_MAINTENANCE: If you change exported helpers or DOM creation rules, update the doc above.
+*/
+
 (function () {
   function el(tag, class_name, text) {
     const node = document.createElement(tag);

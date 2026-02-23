@@ -1,3 +1,8 @@
+/*
+HSE_DOC: custom_components/home_suivi_elec/docs/panel_style.md
+HSE_MAINTENANCE: If you change panel CSS selectors/variables consumed by JS/views, update the doc above.
+*/
+
 :host {
   --hse_gap: 12px;
   --hse_radius: 12px;
