@@ -4,13 +4,12 @@ HSE_MAINTENANCE: If you change repair issue IDs or severity mapping, update the 
 
 from __future__ import annotations
 
-from homeassistant.components.repairs import async_create_issue, async_delete_issue
+from homeassistant.helpers import issue_registry as ir
 
 from .const import DOMAIN
 
 
 def _issue_id(item_id: str) -> str:
-    # item_id contains ':' which is not always friendly; normalize.
     return f"catalogue_offline_{item_id.replace(':', '_')}"
 
 
@@ -26,23 +25,22 @@ async def async_sync_repairs(hass) -> None:
 
         triage = item.get("triage") or {}
         if triage.get("policy") == "removed":
-            await async_delete_issue(hass, DOMAIN, _issue_id(item_id))
+            ir.async_delete_issue(hass, DOMAIN, _issue_id(item_id))
             continue
 
         health = item.get("health") or {}
         esc = health.get("escalation") or "none"
 
-        # mute_until is handled in escalation computation; if esc is none, we delete.
         if esc == "none":
-            await async_delete_issue(hass, DOMAIN, _issue_id(item_id))
+            ir.async_delete_issue(hass, DOMAIN, _issue_id(item_id))
             continue
 
         entity_id = (item.get("source") or {}).get("entity_id") or item_id
         first_unavail = health.get("first_unavailable_at")
 
-        severity = "error" if esc == "error_24h" else "critical"
+        severity = ir.IssueSeverity.ERROR if esc == "error_24h" else ir.IssueSeverity.CRITICAL
 
-        async_create_issue(
+        ir.async_create_issue(
             hass,
             DOMAIN,
             _issue_id(item_id),
