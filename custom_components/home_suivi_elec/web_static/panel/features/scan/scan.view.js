@@ -49,6 +49,13 @@
     return "—";
   }
 
+  function _status_class(status) {
+    const s = String(status || "").toLowerCase();
+    if (s === "ok") return "hse_badge_status_ok";
+    if (s === "not_provided" || s === "disabled") return "hse_badge_status_warn";
+    return "";
+  }
+
   function _render_candidate_list(container, items) {
     clear(container);
 
@@ -70,9 +77,9 @@
       const badges = el("div", "hse_badges");
       badges.appendChild(el("span", "hse_badge", c.kind || "—"));
 
-      // Status (enrichi backend)
       if (c.status) {
-        const st = el("span", "hse_badge", `status: ${_status_label(c.status)}`);
+        const klass = `hse_badge ${_status_class(c.status)}`.trim();
+        const st = el("span", klass, `status: ${_status_label(c.status)}`);
         if (c.status_reason) st.title = String(c.status_reason);
         badges.appendChild(st);
       }
@@ -96,7 +103,6 @@
 
     const card = el("div", "hse_card");
 
-    // Toolbar: Scanner + filtre + open/close all
     const toolbar = el("div", "hse_toolbar");
 
     const btn = el("button", "hse_button hse_button_primary", state.scan_running ? "Scan…" : "Scanner");
@@ -121,7 +127,6 @@
     toolbar.appendChild(btn_close_all);
     card.appendChild(toolbar);
 
-    // Erreur API
     if (scan_result && scan_result.error) {
       const err = el("pre", "hse_code");
       err.textContent = String(scan_result.error);
@@ -130,7 +135,6 @@
       return;
     }
 
-    // Résumé
     const integrations = scan_result.integrations || [];
     const candidates = scan_result.candidates || [];
     const filtered = _filter_candidates(candidates, state.filter_q);
@@ -145,7 +149,6 @@
     summary.appendChild(badges);
     card.appendChild(summary);
 
-    // Tableau intégrations
     const integ_title = el("div", "hse_section_title", `Intégrations détectées`);
     card.appendChild(integ_title);
 
@@ -162,7 +165,6 @@
     );
     card.appendChild(integ_box);
 
-    // Candidats groupés par intégration
     const cand_title = el("div", "hse_section_title", "Candidats (groupés par intégration)");
     card.appendChild(cand_title);
 
@@ -173,7 +175,6 @@
       const details = document.createElement("details");
       details.className = "hse_fold";
 
-      // Ouverture contrôlée: open_all prime, sinon on restaure l'état par intégration
       const wanted_open = state.open_all ? true : !!state.groups_open?.[g.integration_domain];
       if (wanted_open) details.open = true;
 
