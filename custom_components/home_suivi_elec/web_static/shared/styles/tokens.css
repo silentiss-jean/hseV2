@@ -1,11 +1,7 @@
 /*
- * MAINTENANCE NOTE
- *
- * Shared style tokens and primitives for the HSE panel.
- * If you change tokens or badge semantics (e.g. .hse_badge_status_* variants),
- * also update:
- *   - custom_components/home_suivi_elec/docs/tokens_css.md
- */
+HSE_DOC: custom_components/home_suivi_elec/docs/tokens_css.md
+HSE_MAINTENANCE: If you change tokens or badge semantics (e.g. .hse_badge_status_* variants), update the doc above.
+*/
 
 :host {
   /* Layout tokens (OK de garder ici) */
