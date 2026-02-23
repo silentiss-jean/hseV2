@@ -1,3 +1,8 @@
+/*
+HSE_DOC: custom_components/home_suivi_elec/docs/hse_alias_v2_css.md
+HSE_MAINTENANCE: If you add/remove alias variables or change their meaning, update the doc above.
+*/
+
 :host {
   /* alias v2 -> v1 */
   --hse_border: var(--hse-border);

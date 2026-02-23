@@ -1,20 +1,24 @@
-# Unified API registration — `unified_api.py`
+"""
+HSE_DOC: custom_components/home_suivi_elec/docs/unified_api.md
+HSE_MAINTENANCE: Central registration point for unified HTTP API views.
 
-This document describes how the unified HTTP API views are registered for this integration.
+AI-first:
+- Entry point and contracts.
+- List of registered views.
+- Rules for adding a new view.
 
-Target file:
-
-- `custom_components/home_suivi_elec/api/unified_api.py`
-
-This is written **AI-first** (explicit list of views and their intent), with a human layer (usage notes / checklist).
+Human layer:
+- Common failure modes.
+- Debug checklist.
+"""
 
 ---
 
 ## Purpose
 
-Central place to register HTTP views (endpoints) exposed by the integration.
+`unified_api.py` is the single place where Home Assistant HTTP views for this integration are registered.
 
-This file is expected to be called once during integration setup to attach routes to `hass.http`.
+It should be called once during integration setup (typically from `__init__.py` / `async_setup_entry`).
 
 ---
 
@@ -24,31 +28,40 @@ This file is expected to be called once during integration setup to attach route
 
 Behavior:
 
-- Registers the following views:
-  - `PingView()` — connectivity check / health ping.
-  - `FrontendManifestView()` — frontend assets/manifest support.
-  - `EntitiesScanView()` — "Détection" scan endpoint returning power/energy sensor candidates.
+- Registers these views (order is not important, but keep it stable):
+  - `PingView()`
+  - `FrontendManifestView()`
+  - `EntitiesScanView()`
 
-Implementation note:
+Each view is registered using:
 
-- Registration uses `hass.http.register_view(ViewClass())`.
+- `hass.http.register_view(ViewInstance)`
 
 ---
 
-## Design notes
+## Contract: adding a view
 
-- This file should remain small and declarative.
-- When adding/removing endpoints, update both:
-  - this document
-  - any user-facing docs that reference the endpoint URLs
+When adding a new API view:
+
+1) Implement a `HomeAssistantView` subclass in `custom_components/home_suivi_elec/api/views/...`.
+2) Ensure:
+   - `url` is under the integration prefix (see `const.API_PREFIX`).
+   - `requires_auth` is correct.
+   - Responses are JSON and stable (avoid breaking changes to keys).
+3) Import the view class here and register it.
+4) Add/update the corresponding doc in `custom_components/home_suivi_elec/docs/`.
 
 ---
 
 ## Human checklist
 
-When an endpoint "disappears":
+If an endpoint returns 404:
 
-1) Confirm `async_register_unified_api()` is called by the integration setup.
-2) Confirm the view class is imported and registered here.
-3) Check HA logs for errors during integration setup.
+1) Confirm the integration is loaded.
+2) Confirm `async_register_unified_api()` is called during setup.
+3) Check HA logs for startup exceptions.
 
+If an endpoint returns 401:
+
+1) Confirm `requires_auth = True` is intended.
+2) Confirm frontend/API caller includes a valid HA token.

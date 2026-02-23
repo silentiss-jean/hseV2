@@ -1,3 +1,8 @@
+/*
+HSE_DOC: custom_components/home_suivi_elec/docs/hse_panel.md
+HSE_MAINTENANCE: If you change boot/load/auth/state persistence contracts, update the doc above.
+*/
+
 /* entrypoint - hse_panel.js */
 const build_signature = "2026-02-21_1513_fix_root_and_custom";
 

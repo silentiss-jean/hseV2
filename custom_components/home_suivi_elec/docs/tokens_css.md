@@ -1,122 +1,61 @@
-# Shared UI tokens and styles — `tokens.css`
-
-This document describes the shared CSS tokens and common UI primitives used by the HSE panel.
+# Shared component tokens — `tokens.css`
 
 Target file:
 
 - `custom_components/home_suivi_elec/web_static/shared/styles/tokens.css`
 
-This is formatted **AI-first** (what tokens/classes exist and what they mean), plus a human layer (how to extend safely).
+AI-first: CSS class contract used by panel views.
+Human layer: change safety rules.
 
 ---
 
 ## Purpose
 
-Provide a consistent visual system for the HSE web component panel:
+Defines the CSS classes used across the panel (utilities/components).
 
-- Theme-aware colors (prefer HSE theme tokens, fallback to HA tokens).
-- Shared layout tokens (gap/radius).
-- Common primitives: cards, toolbar, buttons, inputs, tables, code blocks.
-- Badge system used heavily by the scan UI.
+This file is injected into the panel shadow DOM by `hse_panel.js`.
 
 ---
 
-## Token model
+## Variable bridging
 
-All tokens are defined on `:host` to scope them to the web component.
+`tokens.css` maps the theme token system to the simplified v1 variables used by older panel code:
 
-### Layout tokens
-
-- `--hse_gap`: default spacing (12px)
-- `--hse_radius`: default border radius (12px)
-
-### Core colors
-
-These use HSE theme tokens if present, otherwise fallback to HA theme tokens:
-
-- `--hse_fg`: text color
-- `--hse_muted`: secondary text color
-- `--hse_border`: border/divider color
-- `--hse_card_bg`: surface/card background
-- `--hse_accent`: primary/accent color
-- `--hse_danger`: error/danger color
-
-### Dynamic background
-
-- `--hse-bg-dynamic-opacity`: overlay opacity for `--hse-bg-dynamic` background image
-
-The background is rendered using `.hse_page::before` as an absolute overlay with `pointer-events:none`.
+- `--hse_fg` comes from `--hse-text` with HA fallback.
+- `--hse_border` comes from `--hse-border` with HA fallback.
+- `--hse_card_bg` comes from `--hse-surface` with HA fallback.
+- `--hse_accent` comes from `--hse-primary` with HA fallback.
+- `--hse_danger` comes from `--hse-error` with HA fallback.
 
 ---
 
-## Key component classes
+## Core layout
 
-### Page & layout
-
-- `.hse_page`: full-viewport container, sets base background.
+- `.hse_page`: full-height page, owns the dynamic background overlay (`::before`).
 - `.hse_shell`: max width container.
-- `.hse_header`, `.hse_title`, `.hse_subtitle`: header layout.
+- `.hse_header`, `.hse_tabs`, `.hse_tab`.
 
-### Tabs, cards, toolbar
+`data-active` contract:
 
-- `.hse_tabs`, `.hse_tab` (+ `[data-active="true"]`)
-- `.hse_card`
-- `.hse_toolbar`
-
-### Buttons & inputs
-
-- `.hse_button`, `.hse_button_primary`, `.hse_button:disabled`
-- `.hse_input`
-
-### Tables & code
-
-- `.hse_table`
-- `.hse_code`
+- Active tabs are detected via `.hse_tab[data-active="true"]`.
 
 ---
 
-## Badge system
+## Components
 
-Badges are small pill UI elements used to display metadata.
-
-Base classes:
-
-- `.hse_badges`: flex container
-- `.hse_badge`: base badge
-- `.hse_badge_warn`: generic warning border
-
-Status variants (used by scan UI):
-
-- `.hse_badge_status_ok`: accent-tinted border/text
-- `.hse_badge_status_warn`: danger-tinted border/text
-
-Important:
-
-- These classes are designed to be theme-aware using `color-mix()` with `--hse_accent`/`--hse_danger`.
-
----
-
-## Usage scenarios
-
-### Scan UI
-
-- Registry status uses `.hse_badge_status_ok` / `.hse_badge_status_warn`.
-- Runtime health badge often uses `.hse_badge_status_warn`.
-
-### Adding a new severity
-
-If you add a new status level (e.g. `info`), prefer:
-
-- Create a new CSS class `.hse_badge_status_info` using a theme token.
-- Keep badge sizing consistent with `.hse_badge`.
+- Cards: `.hse_card`, `.hse_toolbar`, `.hse_button`, `.hse_input`.
+- Table: `.hse_table`.
+- Code blocks: `.hse_code`.
+- Badges: `.hse_badges`, `.hse_badge`, `.hse_badge_warn`.
+- Status badges: `.hse_badge_status_ok`, `.hse_badge_status_warn`.
+- Scan UI: `.hse_groups`, `.hse_fold`, `.hse_fold_summary`, `.hse_candidate_*`.
 
 ---
 
 ## Human checklist
 
-When UI colors look wrong:
+When changing a selector:
 
-1) Verify HSE theme tokens exist (or HA fallback tokens are present).
-2) Check `color-mix()` browser support in your target environment.
-3) Ensure the class is applied in the relevant view.
-
+1) Grep for the class in `web_static/panel/` views.
+2) Keep backwards compatibility if possible (add new class, keep old one for one release).
+3) Verify dynamic background overlay does not block clicks (ensure `pointer-events:none` and sane stacking).
