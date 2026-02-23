@@ -6,7 +6,7 @@
     if (!q) return candidates;
     const needle = q.toLowerCase();
     return candidates.filter((c) => {
-      const hay = `${c.entity_id} ${c.name} ${c.integration_domain} ${c.kind} ${c.unit} ${c.state_class}`.toLowerCase();
+      const hay = `${c.entity_id} ${c.name} ${c.integration_domain} ${c.kind} ${c.unit} ${c.state_class} ${c.status}`.toLowerCase();
       return hay.includes(needle);
     });
   }
@@ -40,6 +40,15 @@
     return groups;
   }
 
+  function _status_label(status) {
+    const s = String(status || "").toLowerCase();
+    if (s === "ok") return "ok";
+    if (s === "disabled") return "disabled";
+    if (s === "not_provided") return "not provided";
+    if (s) return s;
+    return "—";
+  }
+
   function _render_candidate_list(container, items) {
     clear(container);
 
@@ -60,6 +69,14 @@
 
       const badges = el("div", "hse_badges");
       badges.appendChild(el("span", "hse_badge", c.kind || "—"));
+
+      // Status (enrichi backend)
+      if (c.status) {
+        const st = el("span", "hse_badge", `status: ${_status_label(c.status)}`);
+        if (c.status_reason) st.title = String(c.status_reason);
+        badges.appendChild(st);
+      }
+
       if (c.unit) badges.appendChild(el("span", "hse_badge", c.unit));
       if (c.state_class) badges.appendChild(el("span", "hse_badge", c.state_class));
       if (c.disabled_by) badges.appendChild(el("span", "hse_badge hse_badge_warn", `disabled: ${c.disabled_by}`));
@@ -88,7 +105,7 @@
 
     const input = document.createElement("input");
     input.className = "hse_input";
-    input.placeholder = "Filtrer (entity_id, nom, intégration, kind…)";
+    input.placeholder = "Filtrer (entity_id, nom, intégration, kind, status…)";
     input.value = state.filter_q || "";
     input.addEventListener("input", (ev) => on_action("filter", ev.target.value));
 
