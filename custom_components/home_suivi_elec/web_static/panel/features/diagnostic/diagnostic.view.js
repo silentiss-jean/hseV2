@@ -8,10 +8,28 @@
     }
   }
 
+  // Return local time ISO with offset, e.g. 2026-02-23T19:35:00+01:00
   function _local_iso_days_from_now(days) {
     const d = new Date();
     d.setDate(d.getDate() + days);
-    return d.toISOString();
+
+    const pad = (n) => String(n).padStart(2, "0");
+
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const mi = pad(d.getMinutes());
+    const ss = pad(d.getSeconds());
+
+    // getTimezoneOffset: minutes behind UTC (e.g. Paris winter = -60)
+    const tzMin = -d.getTimezoneOffset();
+    const sign = tzMin >= 0 ? "+" : "-";
+    const tzAbs = Math.abs(tzMin);
+    const tzh = pad(Math.floor(tzAbs / 60));
+    const tzm = pad(tzAbs % 60);
+
+    return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}${sign}${tzh}:${tzm}`;
   }
 
   function render_diagnostic(container, catalogue, on_action) {
