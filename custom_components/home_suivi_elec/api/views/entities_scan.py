@@ -24,6 +24,38 @@ def _detect_kind(device_class: str | None, unit: str | None) -> str | None:
     return None
 
 
+def _status_from_registry(reg_entry: er.RegistryEntry | None) -> tuple[str, str | None]:
+    """Return (status, status_reason) for UI.
+
+    status:
+      - ok
+      - disabled
+      - not_provided
+      - unknown
+
+    status_reason is a short machine-ish string.
+    """
+
+    if reg_entry is None:
+        return ("unknown", "entity_registry:missing")
+
+    # Disabled (user/integration/device/etc.)
+    if reg_entry.disabled_by is not None:
+        disabled_by_value = getattr(reg_entry.disabled_by, "value", str(reg_entry.disabled_by))
+        return ("disabled", f"entity_registry:disabled_by:{disabled_by_value}")
+
+    # "Not provided" happens when entity remains in registry but the integration no longer provides it.
+    # HA tracks this via entity_registry EntityRegistryEntry entity_category/status fields depending on version;
+    # we use getattr to stay compatible.
+    ent_status = getattr(reg_entry, "entity_status", None)
+    if ent_status is not None:
+        ent_status_value = getattr(ent_status, "value", str(ent_status))
+        if ent_status_value == "not_provided":
+            return ("not_provided", "entity_registry:not_provided")
+
+    return ("ok", None)
+
+
 class EntitiesScanView(HomeAssistantView):
     url = f"{API_PREFIX}/entities/scan"
     name = "home_suivi_elec:unified:entities_scan"
@@ -37,7 +69,6 @@ class EntitiesScanView(HomeAssistantView):
 
         ent_reg = er.async_get(hass)
         reg_by_entity_id = ent_reg.entities  # map entity_id -> registry entry
-
 
         candidates: list[dict] = []
         integration_counts: dict[str, dict[str, int]] = {}
@@ -61,6 +92,8 @@ class EntitiesScanView(HomeAssistantView):
             reg_entry = reg_by_entity_id.get(entity_id)
             platform = reg_entry.platform if reg_entry else None
             disabled_by = reg_entry.disabled_by if reg_entry else None
+
+            status, status_reason = _status_from_registry(reg_entry)
 
             if not include_disabled and disabled_by is not None:
                 continue
@@ -90,6 +123,8 @@ class EntitiesScanView(HomeAssistantView):
                     "name": friendly_name,
                     "unique_id": reg_entry.unique_id if reg_entry else None,
                     "disabled_by": disabled_by_value,
+                    "status": status,
+                    "status_reason": status_reason,
                     "source": {"is_hse": is_hse},
                 }
             )
