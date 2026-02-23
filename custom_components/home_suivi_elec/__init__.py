@@ -23,6 +23,7 @@ from .const import (
     CATALOGUE_REFRESH_INTERVAL_S,
     CATALOGUE_OFFLINE_GRACE_S,
 )
+from .repairs import async_sync_repairs
 from .scan_engine import detect_kind, status_from_registry, utc_now_iso
 
 
@@ -161,6 +162,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 offline_grace_s=CATALOGUE_OFFLINE_GRACE_S,
             )
             await async_save_catalogue(hass, domain_data["catalogue"])
+
+            # Sync repairs issues after each refresh.
+            await async_sync_repairs(hass)
+
             return {"ok": True, "candidates": len(candidates), "integrations": len(integrations)}
         finally:
             domain_data["catalogue_refresh_running"] = False

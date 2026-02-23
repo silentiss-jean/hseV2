@@ -4,7 +4,7 @@ HSE_MAINTENANCE: If you change boot/load/auth/state persistence contracts, updat
 */
 
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-21_1513_fix_root_and_custom";
+const build_signature = "2026-02-23_1834_diag_repairs";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -44,6 +44,12 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
         open_all: false,
       };
 
+      this._diag_state = {
+        loading: false,
+        data: null,
+        error: null,
+      };
+
       this._boot_done = false;
       this._boot_error = null;
 
@@ -54,18 +60,12 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
         glass: false,
       };
 
-      // Prevents UI re-render loops from closing native dropdowns (select) while user interacts.
-      // We keep this minimal and only guard the Customisation tab.
       this._render_raf_scheduled = false;
     }
 
     set hass(hass) {
       this._hass = hass;
-
-      // HA may assign `hass` frequently; re-rendering the Customisation tab would recreate DOM
-      // and close the theme dropdown. Custom tab doesn't depend on hass live updates.
       if (this._active_tab === "custom") return;
-
       this._render();
     }
 
@@ -75,7 +75,6 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
       console.info(`[HSE] entry loaded (${build_signature})`);
       window.__hse_panel_loaded = build_signature;
 
-      // Theme (appliqué au host => :host([data-theme="..."]))
       this._theme = this._storage_get("hse_theme") || "dark";
       this._custom_state.theme = this._theme;
 
@@ -89,7 +88,6 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
       const saved_tab = this._storage_get("hse_active_tab");
       if (saved_tab) this._active_tab = saved_tab;
 
-      // Scan UI state persistence
       try {
         const raw = this._storage_get("hse_scan_groups_open");
         if (raw) this._scan_state.groups_open = JSON.parse(raw) || {};
@@ -147,6 +145,9 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.view.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/custom/custom.view.js?v=${ASSET_V}`);
+
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/diagnostic/diagnostic.api.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/diagnostic/diagnostic.view.js?v=${ASSET_V}`);
 
         const css_tokens = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_tokens.shadow.css?v=${ASSET_V}`);
         const css_themes = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_themes.shadow.css?v=${ASSET_V}`);
@@ -258,6 +259,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         case "overview":
           this._render_overview();
           return;
+        case "diagnostic":
+          this._render_diagnostic();
+          return;
         case "scan":
           this._render_scan();
           return;
@@ -288,6 +292,61 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       card.appendChild(el("div", null, title));
       card.appendChild(el("div", "hse_subtitle", subtitle || "À venir."));
       this._ui.content.appendChild(card);
+    }
+
+    async _render_diagnostic() {
+      const { el } = window.hse_dom;
+      const container = this._ui.content;
+
+      if (!window.hse_diag_view || !window.hse_diag_api) {
+        this._render_placeholder("Diagnostic", "diagnostic.view.js non chargé.");
+        return;
+      }
+
+      if (!this._diag_state.data && !this._diag_state.loading) {
+        this._diag_state.loading = true;
+        try {
+          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          this._diag_state.error = null;
+        } catch (err) {
+          this._diag_state.error = err?.message || String(err);
+        } finally {
+          this._diag_state.loading = false;
+        }
+      }
+
+      if (this._diag_state.error) {
+        container.appendChild(el("div", "hse_card", `Erreur: ${this._diag_state.error}`));
+        return;
+      }
+
+      if (!this._diag_state.data) {
+        container.appendChild(el("div", "hse_card", "Chargement…"));
+        return;
+      }
+
+      window.hse_diag_view.render_diagnostic(container, this._diag_state.data, async (action, payload) => {
+        if (action === "refresh") {
+          await window.hse_diag_api.refresh_catalogue(this._hass);
+          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          this._render();
+          return;
+        }
+
+        if (action === "mute") {
+          await window.hse_diag_api.set_item_triage(this._hass, payload.item_id, { mute_until: payload.mute_until });
+          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          this._render();
+          return;
+        }
+
+        if (action === "removed") {
+          await window.hse_diag_api.set_item_triage(this._hass, payload.item_id, { policy: "removed" });
+          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          this._render();
+          return;
+        }
+      });
     }
 
     _render_custom() {

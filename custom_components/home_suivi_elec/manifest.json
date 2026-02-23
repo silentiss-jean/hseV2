@@ -7,6 +7,6 @@
   "documentation": "https://github.com/ton_compte/home_suivi_elec",
   "requirements": [],
   "codeowners": [],
-  "iot_class": "local_polling"
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/silentiss-jean/hseV2/issues"
 }
-
