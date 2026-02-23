@@ -1,4 +1,401 @@
-/*
-HSE_DOC: custom_components/home_suivi_elec/docs/hse_panel.md
-HSE_MAINTENANCE: If you change panel boot/auth/globals contracts, update the doc above.
-*/
+/* entrypoint - hse_panel.js */
+const build_signature = "2026-02-21_1513_fix_root_and_custom";
+
+(function () {
+  const PANEL_BASE = "/api/home_suivi_elec/static/panel";
+  const SHARED_BASE = "/api/home_suivi_elec/static/shared";
+
+  // Bump pour casser le cache (scripts + css)
+  // IMPORTANT: doit matcher le cache-buster backend (const.py PANEL_JS_URL)
+  const ASSET_V = "0.1.8";
+
+  const NAV_ITEMS_FALLBACK = [
+    { id: "overview", label: "Accueil" },
+    { id: "diagnostic", label: "Diagnostic" },
+    { id: "scan", label: "Détection" },
+    { id: "config", label: "Configuration" },
+    { id: "custom", label: "Customisation" },
+    { id: "cards", label: "Génération cartes" },
+    { id: "migration", label: "Migration capteurs" },
+    { id: "costs", label: "Analyse de coûts" },
+  ];
+
+  class hse_panel extends HTMLElement {
+    constructor() {
+      super();
+
+      this._hass = null;
+      this._root = null;
+      this._ui = null;
+
+      this._active_tab = "overview";
+      this._overview_data = null;
+
+      this._scan_result = { integrations: [], candidates: [] };
+      this._scan_state = {
+        scan_running: false,
+        filter_q: "",
+        groups_open: {},
+        open_all: false,
+      };
+
+      this._boot_done = false;
+      this._boot_error = null;
+
+      this._theme = "dark";
+      this._custom_state = {
+        theme: "dark",
+        dynamic_bg: true,
+        glass: false,
+      };
+    }
+
+    set hass(hass) {
+      this._hass = hass;
+      this._render();
+    }
+
+    connectedCallback() {
+      if (this._root) return;
+
+      console.info(`[HSE] entry loaded (${build_signature})`);
+      window.__hse_panel_loaded = build_signature;
+
+      // Theme (appliqué au host => :host([data-theme="..."]))
+      this._theme = this._storage_get("hse_theme") || "dark";
+      this._custom_state.theme = this._theme;
+
+      this._custom_state.dynamic_bg = (this._storage_get("hse_custom_dynamic_bg") || "1") === "1";
+      this._custom_state.glass = (this._storage_get("hse_custom_glass") || "0") === "1";
+
+      this.setAttribute("data-theme", this._theme);
+      this._apply_dynamic_bg_override();
+      this._apply_glass_override();
+
+      const saved_tab = this._storage_get("hse_active_tab");
+      if (saved_tab) this._active_tab = saved_tab;
+
+      // Scan UI state persistence
+      try {
+        const raw = this._storage_get("hse_scan_groups_open");
+        if (raw) this._scan_state.groups_open = JSON.parse(raw) || {};
+      } catch (_) {}
+      this._scan_state.open_all = (this._storage_get("hse_scan_open_all") || "0") === "1";
+
+      this._root = this.attachShadow({ mode: "open" });
+      this._boot();
+    }
+
+    _storage_get(key) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    _storage_set(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch (_) {}
+    }
+
+    async _boot() {
+      if (this._boot_done) return;
+
+      if (!window.hse_loader) {
+        window.hse_loader = {
+          load_script_once: (url) =>
+            new Promise((resolve, reject) => {
+              const s = document.createElement("script");
+              s.src = url;
+              s.async = true;
+              s.onload = resolve;
+              s.onerror = () => reject(new Error(`script_load_failed: ${url}`));
+              document.head.appendChild(s);
+            }),
+          load_css_text: async (url) => {
+            const resp = await fetch(url, { cache: "no-store" });
+            if (!resp.ok) throw new Error(`css_load_failed: ${url} (${resp.status})`);
+            return resp.text();
+          },
+        };
+      }
+
+      try {
+        await window.hse_loader.load_script_once(`${SHARED_BASE}/ui/dom.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${SHARED_BASE}/ui/table.js?v=${ASSET_V}`);
+
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/core/shell.js?v=${ASSET_V}`);
+
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/overview/overview.api.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/overview/overview.view.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.api.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/scan/scan.view.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/custom/custom.view.js?v=${ASSET_V}`);
+
+        const css_tokens = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_tokens.shadow.css?v=${ASSET_V}`);
+        const css_themes = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_themes.shadow.css?v=${ASSET_V}`);
+        const css_alias = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_alias.v2.css?v=${ASSET_V}`);
+        const css_panel = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/tokens.css?v=${ASSET_V}`);
+
+        this._root.innerHTML = `<style>
+${css_tokens}
+
+${css_themes}
+
+${css_alias}
+
+${css_panel}
+</style><div id="root"></div>`;
+
+        this._boot_done = true;
+        this._boot_error = null;
+      } catch (err) {
+        this._boot_error = err?.message || String(err);
+        console.error("[HSE] boot error", err);
+
+        this._root.innerHTML = `<style>
+:host{display:block;padding:16px;font-family:system-ui;color:var(--primary-text-color);}
+pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding:12px;border-radius:10px;}
+</style>
+<div>
+  <div style="font-size:18px">Home Suivi Elec</div>
+  <div style="opacity:.8">Boot error</div>
+  <pre>${this._escape_html(this._boot_error)}</pre>
+</div>`;
+      } finally {
+        this._render();
+      }
+    }
+
+    _escape_html(s) {
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    _get_nav_items() {
+      const from_shell = window.hse_shell?.get_nav_items?.();
+      if (Array.isArray(from_shell) && from_shell.length) return from_shell;
+      return NAV_ITEMS_FALLBACK;
+    }
+
+    _ensure_valid_tab() {
+      const items = this._get_nav_items();
+      if (!items.some((x) => x.id === this._active_tab)) {
+        this._active_tab = items[0]?.id || "overview";
+      }
+    }
+
+    _set_active_tab(tab_id) {
+      this._active_tab = tab_id;
+      this._storage_set("hse_active_tab", tab_id);
+      this._render();
+    }
+
+    _set_theme(theme_key) {
+      this._theme = theme_key || "dark";
+      this._custom_state.theme = this._theme;
+
+      this.setAttribute("data-theme", this._theme);
+      this._storage_set("hse_theme", this._theme);
+      this._render();
+    }
+
+    _apply_dynamic_bg_override() {
+      this.style.setProperty("--hse-bg-dynamic-opacity", this._custom_state.dynamic_bg ? "" : "0");
+    }
+
+    _apply_glass_override() {
+      this.style.setProperty("--hse-backdrop-filter", this._custom_state.glass ? "blur(18px) saturate(160%)" : "");
+    }
+
+    _render() {
+      if (!this._root) return;
+
+      const root = this._root.querySelector("#root");
+      if (!root) return;
+
+      if (!window.hse_shell || !window.hse_dom) return;
+
+      const user_name = this._hass?.user?.name || "—";
+
+      if (!this._ui) {
+        this._ui = window.hse_shell.create_shell(root, { user_name });
+      }
+
+      this._ui.header_right.textContent = `user: ${user_name}`;
+
+      this._ensure_valid_tab();
+      this._render_nav_tabs();
+
+      window.hse_dom.clear(this._ui.content);
+
+      if (!this._hass) {
+        this._ui.content.appendChild(window.hse_dom.el("div", "hse_card", "En attente de hass…"));
+        return;
+      }
+
+      switch (this._active_tab) {
+        case "overview":
+          this._render_overview();
+          return;
+        case "scan":
+          this._render_scan();
+          return;
+        case "custom":
+          this._render_custom();
+          return;
+        default:
+          this._render_placeholder("Page", "À venir.");
+      }
+    }
+
+    _render_nav_tabs() {
+      const { el, clear } = window.hse_dom;
+      clear(this._ui.tabs);
+
+      for (const it of this._get_nav_items()) {
+        const b = el("button", "hse_tab", it.label);
+        b.dataset.active = it.id === this._active_tab ? "true" : "false";
+        b.addEventListener("click", () => this._set_active_tab(it.id));
+        this._ui.tabs.appendChild(b);
+      }
+    }
+
+    _render_placeholder(title, subtitle) {
+      const { el } = window.hse_dom;
+
+      const card = el("div", "hse_card");
+      card.appendChild(el("div", null, title));
+      card.appendChild(el("div", "hse_subtitle", subtitle || "À venir."));
+      this._ui.content.appendChild(card);
+    }
+
+    _render_custom() {
+      const container = this._ui.content;
+
+      if (!window.hse_custom_view?.render_customisation) {
+        this._render_placeholder("Customisation", "custom.view.js non chargé.");
+        return;
+      }
+
+      window.hse_custom_view.render_customisation(container, this._custom_state, (action, value) => {
+        if (action === "set_theme") {
+          this._set_theme(value || "dark");
+          return;
+        }
+
+        if (action === "toggle_dynamic_bg") {
+          this._custom_state.dynamic_bg = !this._custom_state.dynamic_bg;
+          this._storage_set("hse_custom_dynamic_bg", this._custom_state.dynamic_bg ? "1" : "0");
+          this._apply_dynamic_bg_override();
+          this._render();
+          return;
+        }
+
+        if (action === "toggle_glass") {
+          this._custom_state.glass = !this._custom_state.glass;
+          this._storage_set("hse_custom_glass", this._custom_state.glass ? "1" : "0");
+          this._apply_glass_override();
+          this._render();
+          return;
+        }
+      });
+    }
+
+    async _render_overview() {
+      const { el } = window.hse_dom;
+      const container = this._ui.content;
+
+      const card = el("div", "hse_card");
+      const toolbar = el("div", "hse_toolbar");
+
+      const btn = el("button", "hse_button hse_button_primary", "Rafraîchir");
+      btn.addEventListener("click", async () => {
+        this._overview_data = null;
+        this._render();
+
+        try {
+          this._overview_data = await window.hse_overview_api.fetch_manifest_and_ping(this._hass);
+        } catch (err) {
+          this._overview_data = { error: err?.message || String(err) };
+        }
+
+        this._render();
+      });
+
+      toolbar.appendChild(btn);
+      card.appendChild(toolbar);
+      container.appendChild(card);
+
+      if (!this._overview_data) {
+        container.appendChild(el("div", "hse_subtitle", "Clique sur Rafraîchir."));
+        return;
+      }
+
+      window.hse_overview_view.render_overview(container, this._overview_data);
+    }
+
+    _render_scan() {
+      const container = this._ui.content;
+
+      window.hse_scan_view.render_scan(container, this._scan_result, this._scan_state, async (action, value) => {
+        if (action === "filter") {
+          this._scan_state.filter_q = value || "";
+          this._render();
+          return;
+        }
+
+        if (action === "set_group_open") {
+          const { id, open, no_render } = value || {};
+          if (id) {
+            this._scan_state.groups_open[id] = !!open;
+            this._storage_set("hse_scan_groups_open", JSON.stringify(this._scan_state.groups_open));
+          }
+          if (!no_render) this._render();
+          return;
+        }
+
+        if (action === "open_all") {
+          this._scan_state.open_all = true;
+          this._storage_set("hse_scan_open_all", "1");
+          this._render();
+          return;
+        }
+
+        if (action === "close_all") {
+          this._scan_state.open_all = false;
+          this._scan_state.groups_open = {};
+          this._storage_set("hse_scan_open_all", "0");
+          this._storage_set("hse_scan_groups_open", "{}");
+          this._render();
+          return;
+        }
+
+        if (action === "scan") {
+          this._scan_state.scan_running = true;
+          this._render();
+
+          try {
+            this._scan_result = await window.hse_scan_api.fetch_scan(this._hass, {
+              include_disabled: false,
+              exclude_hse: true,
+            });
+          } catch (err) {
+            this._scan_result = { error: err?.message || String(err), integrations: [], candidates: [] };
+          } finally {
+            this._scan_state.scan_running = false;
+            this._render();
+          }
+        }
+      });
+    }
+  }
+
+  customElements.define("hse-panel", hse_panel);
+})();

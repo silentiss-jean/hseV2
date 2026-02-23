@@ -1,4 +1,9 @@
-/*
-HSE_DOC: custom_components/home_suivi_elec/docs/overview_api.md
-HSE_MAINTENANCE: If you change endpoint URLs/response parsing here, update the doc above.
-*/
+(function () {
+  async function fetch_manifest_and_ping(hass) {
+    const manifest = await hass.callApi("GET", "home_suivi_elec/unified/frontend_manifest");
+    const ping = await hass.callApi("GET", "home_suivi_elec/unified/ping");
+    return { manifest, ping };
+  }
+
+  window.hse_overview_api = { fetch_manifest_and_ping };
+})();

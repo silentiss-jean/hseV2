@@ -1,4 +1,18 @@
-/*
-HSE_DOC: custom_components/home_suivi_elec/docs/overview_view.md
-HSE_MAINTENANCE: If you change rendering rules/fields here, update the doc above.
-*/
+(function () {
+  const { el, clear } = window.hse_dom;
+
+  function render_overview(container, data) {
+    clear(container);
+
+    const card = el("div", "hse_card");
+    card.appendChild(el("div", null, "API (manifest / ping)"));
+
+    const pre = el("pre", "hse_code");
+    pre.textContent = JSON.stringify(data, null, 2);
+
+    card.appendChild(pre);
+    container.appendChild(card);
+  }
+
+  window.hse_overview_view = { render_overview };
+})();

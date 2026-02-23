@@ -1,4 +1,12 @@
-/*
-HSE_DOC: custom_components/home_suivi_elec/docs/manifest.md
-HSE_MAINTENANCE: If you change runtime dependencies/metadata here, update the doc above.
-*/
+{
+  "domain": "home_suivi_elec",
+  "name": "Home Suivi Elec",
+  "version": "0.1.0",
+  "config_flow": true,
+  "single_config_entry": true,
+  "documentation": "https://github.com/ton_compte/home_suivi_elec",
+  "requirements": [],
+  "codeowners": [],
+  "iot_class": "local_polling"
+}
+

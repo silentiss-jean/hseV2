@@ -1,8 +1,3 @@
-/*
-HSE_DOC: custom_components/home_suivi_elec/docs/scan_ui.md
-HSE_MAINTENANCE: If you change scan API payload usage or badge/grouping/filter rules here, update the doc above.
-*/
-
 (function () {
   const { el, clear } = window.hse_dom;
   const { render_table } = window.hse_table;
