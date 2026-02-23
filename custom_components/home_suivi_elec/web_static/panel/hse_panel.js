@@ -370,7 +370,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
 
         if (action === "close_all") {
           this._scan_state.open_all = false;
+          this._scan_state.groups_open = {};
           this._storage_set("hse_scan_open_all", "0");
+          this._storage_set("hse_scan_groups_open", "{}");
           this._render();
           return;
         }
