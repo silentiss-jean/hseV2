@@ -45,8 +45,6 @@ def _status_from_registry(reg_entry: er.RegistryEntry | None) -> tuple[str, str 
         return ("disabled", f"entity_registry:disabled_by:{disabled_by_value}")
 
     # "Not provided" happens when entity remains in registry but the integration no longer provides it.
-    # HA tracks this via entity_registry EntityRegistryEntry entity_category/status fields depending on version;
-    # we use getattr to stay compatible.
     ent_status = getattr(reg_entry, "entity_status", None)
     if ent_status is not None:
         ent_status_value = getattr(ent_status, "value", str(ent_status))
@@ -108,6 +106,9 @@ class EntitiesScanView(HomeAssistantView):
 
             integration_domain = platform or "unknown"
 
+            ha_state = st.state
+            ha_restored = bool(attrs.get("restored", False))
+
             candidates.append(
                 {
                     "entity_id": entity_id,
@@ -125,6 +126,8 @@ class EntitiesScanView(HomeAssistantView):
                     "disabled_by": disabled_by_value,
                     "status": status,
                     "status_reason": status_reason,
+                    "ha_state": ha_state,
+                    "ha_restored": ha_restored,
                     "source": {"is_hse": is_hse},
                 }
             )
