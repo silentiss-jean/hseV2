@@ -53,10 +53,19 @@ const build_signature = "2026-02-21_1513_fix_root_and_custom";
         dynamic_bg: true,
         glass: false,
       };
+
+      // Prevents UI re-render loops from closing native dropdowns (select) while user interacts.
+      // We keep this minimal and only guard the Customisation tab.
+      this._render_raf_scheduled = false;
     }
 
     set hass(hass) {
       this._hass = hass;
+
+      // HA may assign `hass` frequently; re-rendering the Customisation tab would recreate DOM
+      // and close the theme dropdown. Custom tab doesn't depend on hass live updates.
+      if (this._active_tab === "custom") return;
+
       this._render();
     }
 
