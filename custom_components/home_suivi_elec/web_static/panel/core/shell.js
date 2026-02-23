@@ -1,3 +1,8 @@
+/*
+HSE_DOC: custom_components/home_suivi_elec/docs/panel_shell.md
+HSE_MAINTENANCE: If you change navigation items or shell DOM contracts, update the doc above.
+*/
+
 (function () {
   const { el, clear } = window.hse_dom;
 

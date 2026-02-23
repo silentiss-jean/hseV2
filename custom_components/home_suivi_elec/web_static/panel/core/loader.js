@@ -1,3 +1,8 @@
+/*
+HSE_DOC: custom_components/home_suivi_elec/docs/panel_loader.md
+HSE_MAINTENANCE: If you change loader exported functions or load semantics, update the doc above.
+*/
+
 (function () {
   const loaded_urls = new Set();
 
