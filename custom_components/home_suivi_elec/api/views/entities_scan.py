@@ -1,3 +1,12 @@
+"""
+MAINTENANCE NOTE
+
+This view implements the unified entities scan endpoint.
+If you change scan selection rules, candidate fields, or status semantics,
+also update:
+  - custom_components/home_suivi_elec/docs/entities_scan.md
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

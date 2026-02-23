@@ -1,3 +1,11 @@
+/*
+ * MAINTENANCE NOTE
+ *
+ * This module exposes the unified API endpoints by registering HA HTTP views.
+ * If you add/remove/rename views here, also update:
+ *   - custom_components/home_suivi_elec/docs/unified_api.md
+ */
+
 from __future__ import annotations
 
 from .views.entities_scan import EntitiesScanView
