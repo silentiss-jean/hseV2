@@ -1,20 +1,38 @@
-# Shadow theme styles — `hse_alias.v2.css`
+# Shadow CSS aliases — `hse_alias.v2.css`
 
 Target file:
 
 - `custom_components/home_suivi_elec/web_static/shared/styles/hse_alias.v2.css`
 
-AI-first: what variables it defines and why.
-Human layer: extension.
+AI-first: alias map contract.
+Human layer: migration notes.
 
 ---
 
 ## Purpose
 
-Defines theme variable aliases for the HSE panel shadow DOM.
+Provide compatibility aliases from an older variable naming scheme to a newer one.
 
-Document here:
+This file is intended to be injected into the panel shadow DOM.
 
-- which CSS variables are provided,
-- mapping rules,
-- compatibility notes.
+---
+
+## Alias mapping
+
+Defined on `:host`:
+
+- `--hse_border` -> `--hse-border`
+- `--hse_muted` -> `--hse-text-muted`
+- `--hse_card_bg` -> `--hse-surface`
+- `--hse_danger` -> `--hse-error`
+- `--hse_accent` -> `--hse-accent`
+- `--hse_gap` -> `--hse-spacing-md`
+- `--hse_radius` -> `--hse-radius-lg`
+
+---
+
+## Human checklist
+
+1) If you introduce new tokens in `hse_tokens.shadow.css`, decide whether they need a v1 alias.
+2) Keep aliases minimal; avoid creating two sources of truth.
+3) Verify final computed values in devtools (shadow host styles).

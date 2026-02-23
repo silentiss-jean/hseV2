@@ -1,3 +1,8 @@
+/*
+HSE_DOC: custom_components/home_suivi_elec/docs/table_js.md
+HSE_MAINTENANCE: If you change table rendering contract (columns API, placeholder, classes), update the doc above.
+*/
+
 (function () {
   const { el, clear } = window.hse_dom;
 
