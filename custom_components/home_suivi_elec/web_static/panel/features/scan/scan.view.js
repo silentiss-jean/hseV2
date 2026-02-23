@@ -6,7 +6,7 @@
     if (!q) return candidates;
     const needle = q.toLowerCase();
     return candidates.filter((c) => {
-      const hay = `${c.entity_id} ${c.name} ${c.integration_domain} ${c.kind} ${c.unit} ${c.state_class} ${c.status}`.toLowerCase();
+      const hay = `${c.entity_id} ${c.name} ${c.integration_domain} ${c.kind} ${c.unit} ${c.state_class} ${c.status} ${c.ha_state}`.toLowerCase();
       return hay.includes(needle);
     });
   }
@@ -56,6 +56,13 @@
     return "";
   }
 
+  function _ha_state_class(ha_state, ha_restored) {
+    const s = String(ha_state || "").toLowerCase();
+    if (s === "unavailable" || s === "unknown") return "hse_badge_status_warn";
+    if (ha_restored) return "hse_badge_status_warn";
+    return "";
+  }
+
   function _render_candidate_list(container, items) {
     clear(container);
 
@@ -82,6 +89,13 @@
         const st = el("span", klass, `status: ${_status_label(c.status)}`);
         if (c.status_reason) st.title = String(c.status_reason);
         badges.appendChild(st);
+      }
+
+      if (c.ha_state) {
+        const klass = `hse_badge ${_ha_state_class(c.ha_state, c.ha_restored)}`.trim();
+        const st2 = el("span", klass, `state: ${c.ha_state}`);
+        if (c.ha_restored) st2.title = "restored: true";
+        badges.appendChild(st2);
       }
 
       if (c.unit) badges.appendChild(el("span", "hse_badge", c.unit));
@@ -111,7 +125,7 @@
 
     const input = document.createElement("input");
     input.className = "hse_input";
-    input.placeholder = "Filtrer (entity_id, nom, intégration, kind, status…)";
+    input.placeholder = "Filtrer (entity_id, nom, intégration, kind, status, state…)";
     input.value = state.filter_q || "";
     input.addEventListener("input", (ev) => on_action("filter", ev.target.value));
 
