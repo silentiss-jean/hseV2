@@ -180,7 +180,6 @@
       details.appendChild(summary_el);
       details.appendChild(body);
 
-      // Persist open/close WITHOUT forcing a full panel rerender
       details.addEventListener("toggle", () => {
         on_action("set_group_open", { id: g.integration_domain, open: details.open, no_render: true });
 
