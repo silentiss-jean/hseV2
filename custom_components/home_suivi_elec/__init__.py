@@ -51,8 +51,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     domain_data = hass.data.setdefault(DOMAIN, {})
 
-    # Load persistent catalogue
     domain_data["catalogue"] = await async_load_catalogue(hass)
+
+    async def _save_catalogue():
+        await async_save_catalogue(hass, domain_data["catalogue"])
+
+    domain_data["catalogue_save"] = _save_catalogue
 
     async def _do_refresh(*, force: bool = False):
         if domain_data.get("catalogue_refresh_running") and not force:
@@ -102,7 +106,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 integration_domain = platform or "unknown"
 
-                # eligibility guardrails for downstream (derived entities / calculations)
                 ha_state_l = str(ha_state or "").lower()
                 is_unavailable = ha_state_l in ("unavailable", "unknown")
 
@@ -152,7 +155,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "candidates": candidates,
             }
 
-            domain_data["catalogue"] = merge_scan_into_catalogue(domain_data["catalogue"], scan_payload)
+            domain_data["catalogue"] = merge_scan_into_catalogue(
+                domain_data["catalogue"],
+                scan_payload,
+                offline_grace_s=CATALOGUE_OFFLINE_GRACE_S,
+            )
             await async_save_catalogue(hass, domain_data["catalogue"])
             return {"ok": True, "candidates": len(candidates), "integrations": len(integrations)}
         finally:
