@@ -1,3 +1,12 @@
+/*
+ * MAINTENANCE NOTE
+ *
+ * This view renders the unified entities scan UI.
+ * If you change the scan API payload (fields like status/status_reason/ha_state/ha_restored)
+ * or the badge/grouping rules, also update:
+ *   - custom_components/home_suivi_elec/docs/scan_ui.md
+ */
+
 (function () {
   const { el, clear } = window.hse_dom;
   const { render_table } = window.hse_table;
