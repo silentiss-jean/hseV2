@@ -1,8 +1,3 @@
-"""
-HSE_DOC: custom_components/home_suivi_elec/docs/entities_scan.md
-HSE_MAINTENANCE: If you change scan selection rules, candidate fields, or status semantics, update the doc above.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -11,6 +6,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.helpers import entity_registry as er
 
 from ...const import API_PREFIX, DOMAIN
+from ...scan_engine import detect_kind, status_from_registry
 
 
 def _q_bool(request, key: str, default: bool) -> bool:
@@ -19,55 +15,6 @@ def _q_bool(request, key: str, default: bool) -> bool:
         return default
     raw = str(raw).strip().lower()
     return raw in ("1", "true", "yes", "y", "on")
-
-
-def _detect_kind(device_class: str | None, unit: str | None) -> str | None:
-    if device_class == "energy" or unit in ("kWh", "Wh"):
-        return "energy"
-    if device_class == "power" or unit in ("W", "kW"):
-        return "power"
-    return None
-
-
-def _status_from_registry(
-    reg_entry: er.RegistryEntry | None,
-    *,
-    ha_state: str | None = None,
-    ha_restored: bool = False,
-) -> tuple[str, str | None]:
-    """Return (status, status_reason) for UI.
-
-    status:
-      - ok
-      - disabled
-      - not_provided
-      - unknown
-
-    status_reason is a short machine-ish string.
-    """
-
-    if reg_entry is None:
-        return ("unknown", "entity_registry:missing")
-
-    # Disabled (user/integration/device/etc.)
-    if reg_entry.disabled_by is not None:
-        disabled_by_value = getattr(reg_entry.disabled_by, "value", str(reg_entry.disabled_by))
-        return ("disabled", f"entity_registry:disabled_by:{disabled_by_value}")
-
-    # Prefer explicit registry status when available.
-    ent_status = getattr(reg_entry, "entity_status", None)
-    if ent_status is not None:
-        ent_status_value = getattr(ent_status, "value", str(ent_status))
-        if ent_status_value == "not_provided":
-            return ("not_provided", "entity_registry:not_provided")
-
-    # Conservative fallback: treat orphaned entities (no config_entry_id) as not_provided
-    # only when the runtime state looks restored/unavailable.
-    # This matches HA UI cases where entity is kept in registry but integration no longer provides it.
-    if reg_entry.config_entry_id is None and ha_restored and str(ha_state or "").lower() in ("unavailable", "unknown"):
-        return ("not_provided", "entity_registry:orphaned+restored")
-
-    return ("ok", None)
 
 
 class EntitiesScanView(HomeAssistantView):
@@ -99,7 +46,7 @@ class EntitiesScanView(HomeAssistantView):
             state_class = attrs.get("state_class")
             friendly_name = attrs.get("friendly_name") or entity_id
 
-            kind = _detect_kind(device_class, unit)
+            kind = detect_kind(device_class, unit)
             if kind is None:
                 continue
 
@@ -110,7 +57,7 @@ class EntitiesScanView(HomeAssistantView):
             ha_state = st.state
             ha_restored = bool(attrs.get("restored", False))
 
-            status, status_reason = _status_from_registry(reg_entry, ha_state=ha_state, ha_restored=ha_restored)
+            status, status_reason = status_from_registry(reg_entry, ha_state=ha_state, ha_restored=ha_restored)
 
             if not include_disabled and disabled_by is not None:
                 continue
@@ -132,7 +79,7 @@ class EntitiesScanView(HomeAssistantView):
                     "unit": unit,
                     "device_class": device_class,
                     "state_class": state_class,
-                    "integration_domain": integration_domain,  # = registry_entry.platform
+                    "integration_domain": integration_domain,
                     "platform": platform,
                     "config_entry_id": reg_entry.config_entry_id if reg_entry else None,
                     "device_id": reg_entry.device_id if reg_entry else None,

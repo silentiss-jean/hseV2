@@ -21,7 +21,9 @@ from .const import (
     PANEL_ELEMENT_NAME,
     PANEL_JS_URL,
     CATALOGUE_REFRESH_INTERVAL_S,
+    CATALOGUE_OFFLINE_GRACE_S,
 )
+from .scan_engine import detect_kind, status_from_registry, utc_now_iso
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -53,7 +55,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data["catalogue"] = await async_load_catalogue(hass)
 
     async def _do_refresh(*, force: bool = False):
-        # Simple in-memory lock
         if domain_data.get("catalogue_refresh_running") and not force:
             return {"skipped": True, "reason": "refresh_running"}
 
@@ -64,6 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ent_reg = er.async_get(hass)
             reg_by_entity_id = ent_reg.entities
 
+            now_iso = utc_now_iso()
             candidates = []
             integration_counts = {}
 
@@ -77,12 +79,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 device_class = attrs.get("device_class")
                 state_class = attrs.get("state_class")
 
-                kind = None
-                if device_class == "energy" or unit in ("kWh", "Wh"):
-                    kind = "energy"
-                elif device_class == "power" or unit in ("W", "kW"):
-                    kind = "power"
-                else:
+                kind = detect_kind(device_class, unit)
+                if kind is None:
                     continue
 
                 reg_entry = reg_by_entity_id.get(entity_id)
@@ -92,12 +90,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if is_hse:
                     continue
 
+                ha_state = st.state
+                ha_restored = bool(attrs.get("restored", False))
+
+                status, status_reason = status_from_registry(reg_entry, ha_state=ha_state, ha_restored=ha_restored)
+
                 disabled_by = reg_entry.disabled_by if reg_entry else None
                 disabled_by_value = None
                 if disabled_by is not None:
                     disabled_by_value = getattr(disabled_by, "value", str(disabled_by))
 
                 integration_domain = platform or "unknown"
+
+                # eligibility guardrails for downstream (derived entities / calculations)
+                ha_state_l = str(ha_state or "").lower()
+                is_unavailable = ha_state_l in ("unavailable", "unknown")
 
                 candidates.append(
                     {
@@ -114,10 +121,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "name": (attrs.get("friendly_name") or entity_id),
                         "unique_id": reg_entry.unique_id if reg_entry else None,
                         "disabled_by": disabled_by_value,
-                        "status": "ok" if disabled_by is None else "disabled",
-                        "status_reason": None if disabled_by is None else f"entity_registry:disabled_by:{disabled_by_value}",
-                        "ha_state": st.state,
-                        "ha_restored": bool(attrs.get("restored", False)),
+                        "status": status,
+                        "status_reason": status_reason,
+                        "ha_state": ha_state,
+                        "ha_restored": ha_restored,
+                        "meta": {
+                            "offline_grace_s": CATALOGUE_OFFLINE_GRACE_S,
+                            "scan_generated_at": now_iso,
+                            "is_unavailable": is_unavailable,
+                        },
                     }
                 )
 
@@ -148,10 +160,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     domain_data["catalogue_refresh"] = _do_refresh
 
-    # Refresh once shortly after startup
     hass.async_create_task(_do_refresh(force=True))
 
-    # Periodic refresh
     async def _interval(_now):
         await _do_refresh(force=False)
 
@@ -161,7 +171,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         timedelta(seconds=CATALOGUE_REFRESH_INTERVAL_S),
     )
 
-    # keep an entry bucket for future per-entry state
     domain_data[entry.entry_id] = {}
     return True
 
