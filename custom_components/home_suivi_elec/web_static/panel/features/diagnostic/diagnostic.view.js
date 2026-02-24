@@ -211,7 +211,7 @@
       const payload = {
         last_action: state.last_action,
         last_request: state.last_request,
-        last_response: state.last_response
+        last_response: state.last_response,
       };
       pre.textContent = JSON.stringify(payload, null, 2);
       adv.appendChild(pre);
@@ -224,13 +224,13 @@
       pre2.style.wordBreak = "break-word";
       pre2.textContent = [
         "# 1) Voir toutes les alertes (escalation != none)",
-        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.health.escalation!="none") | {item_id:.key, entity_id:.value.source.entity_id, esc:.value.health.escalation, status:.value.source.status, integration:.value.source.integration_domain}'",
+        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.health.escalation!=\"none\") | {item_id:.key, entity_id:.value.source.entity_id, esc:.value.health.escalation, status:.value.source.status, integration:.value.source.integration_domain}'",
         "",
         "# 2) Voir les items removed",
-        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.policy=="removed") | {item_id:.key, entity_id:.value.source.entity_id, policy:.value.triage.policy}'",
+        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.policy==\"removed\") | {item_id:.key, entity_id:.value.source.entity_id, policy:.value.triage.policy}'",
         "",
         "# 3) Voir les items muted (actifs)",
-        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.mute_until!=null) | {item_id:.key, entity_id:.value.source.entity_id, mute_until:.value.triage.mute_until}'"
+        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.mute_until!=null) | {item_id:.key, entity_id:.value.source.entity_id, mute_until:.value.triage.mute_until}'",
       ].join("\n");
       adv2.appendChild(pre2);
       container.appendChild(adv2);
