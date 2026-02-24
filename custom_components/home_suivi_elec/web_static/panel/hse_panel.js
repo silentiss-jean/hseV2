@@ -1,5 +1,5 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-24_1139_diag_bulk";
+const build_signature = "2026-02-24_1147_diag_bulk_v2";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -90,7 +90,6 @@ const build_signature = "2026-02-24_1139_diag_bulk";
       } catch (_) {}
       this._scan_state.open_all = (this._storage_get("hse_scan_open_all") || "0") === "1";
 
-      // Diagnostic UI state persistence
       this._diag_state.filter_q = this._storage_get("hse_diag_filter_q") || "";
       try {
         const rawSel = this._storage_get("hse_diag_selected");
@@ -328,6 +327,32 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         return;
       }
 
+      const _selected_ids = () => Object.keys(this._diag_state.selected || {}).filter((k) => this._diag_state.selected[k]);
+
+      const _mute_until_days = (days) => {
+        // Use helper exposed by diagnostic.view.js
+        const fn = window.hse_diag_view?._local_iso_days_from_now;
+        if (fn) return fn(days);
+
+        // fallback
+        const dd = new Date();
+        dd.setDate(dd.getDate() + days);
+        const pad = (n) => String(n).padStart(2, "0");
+        const yyyy = dd.getFullYear(), mm = pad(dd.getMonth() + 1), da = pad(dd.getDate());
+        const hh = pad(dd.getHours()), mi = pad(dd.getMinutes()), ss = pad(dd.getSeconds());
+        const tzMin = -dd.getTimezoneOffset();
+        const sign = tzMin >= 0 ? "+" : "-";
+        const tzAbs = Math.abs(tzMin);
+        const tzh = pad(Math.floor(tzAbs / 60)), tzm = pad(tzAbs % 60);
+        return `${yyyy}-${mm}-${da}T${hh}:${mi}:${ss}${sign}${tzh}:${tzm}`;
+      };
+
+      const _filtered_ids = () => {
+        const fn = window.hse_diag_view?._filtered_escalated_items;
+        if (!fn) return [];
+        return fn(this._diag_state.data, this._diag_state.filter_q).map((x) => x.id);
+      };
+
       window.hse_diag_view.render_diagnostic(container, this._diag_state.data, this._diag_state, async (action, payload) => {
         if (action === "filter") {
           this._diag_state.filter_q = payload || "";
@@ -345,22 +370,32 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
           return;
         }
 
-        const _selected_ids = () => Object.keys(this._diag_state.selected || {}).filter((k) => this._diag_state.selected[k]);
+        if (action === "select_none") {
+          this._diag_state.selected = {};
+          this._storage_set("hse_diag_selected", "{}");
+          this._render();
+          return;
+        }
+
+        if (action === "select_all_filtered") {
+          const ids = _filtered_ids();
+          for (const id of ids) this._diag_state.selected[id] = true;
+          this._storage_set("hse_diag_selected", JSON.stringify(this._diag_state.selected));
+          this._render();
+          return;
+        }
 
         if (action === "bulk_mute") {
-          const ids = _selected_ids();
+          const mode = payload?.mode || "selection";
+          const ids = mode === "filtered" ? _filtered_ids() : _selected_ids();
           if (!ids.length) return;
-          await window.hse_diag_api.bulk_triage(this._hass, ids, { mute_until: payload?.days ? window.hse_diag_view._local_iso_days_from_now?.(payload.days) : null });
-          // fallback: compute here
-          const d = payload?.days || 7;
-          const mute_until = (function(){
-            const dd = new Date(); dd.setDate(dd.getDate()+d);
-            const pad=(n)=>String(n).padStart(2,"0");
-            const yyyy=dd.getFullYear(),mm=pad(dd.getMonth()+1),da=pad(dd.getDate()),hh=pad(dd.getHours()),mi=pad(dd.getMinutes()),ss=pad(dd.getSeconds());
-            const tzMin=-dd.getTimezoneOffset(); const sign=tzMin>=0?"+":"-"; const tzAbs=Math.abs(tzMin);
-            const tzh=pad(Math.floor(tzAbs/60)),tzm=pad(tzAbs%60);
-            return `${yyyy}-${mm}-${da}T${hh}:${mi}:${ss}${sign}${tzh}:${tzm}`;
-          })();
+
+          const days = payload?.days || 7;
+          const mute_until = _mute_until_days(days);
+
+          const ok = window.confirm(`Appliquer MUTE ${days}j sur ${ids.length} item(s) (${mode}) ?`);
+          if (!ok) return;
+
           await window.hse_diag_api.bulk_triage(this._hass, ids, { mute_until });
           this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
           this._render();
@@ -368,8 +403,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         }
 
         if (action === "bulk_removed") {
-          const ids = _selected_ids();
+          const mode = payload?.mode || "selection";
+          const ids = mode === "filtered" ? _filtered_ids() : _selected_ids();
           if (!ids.length) return;
+
+          const ok = window.confirm(`Appliquer REMOVED sur ${ids.length} item(s) (${mode}) ?`);
+          if (!ok) return;
+
           await window.hse_diag_api.bulk_triage(this._hass, ids, { policy: "removed" });
           this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
           this._render();
