@@ -31,7 +31,8 @@ async def async_sync_repairs(hass) -> None:
         health = item.get("health") or {}
         esc = health.get("escalation") or "none"
 
-        if esc == "none":
+        # Only create Repairs issues for 24h/48h thresholds.
+        if esc not in ("error_24h", "action_48h"):
             ir.async_delete_issue(hass, DOMAIN, _issue_id(item_id))
             continue
 

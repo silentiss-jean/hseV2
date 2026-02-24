@@ -29,7 +29,6 @@ def _update_health(existing: dict[str, Any], *, ha_state: str | None, status: st
     health = existing.setdefault("health", {})
 
     if status == "not_provided":
-        # Treat as unavailable and escalate immediately.
         if not health.get("first_unavailable_at"):
             health["first_unavailable_at"] = now_iso
         return
@@ -39,7 +38,6 @@ def _update_health(existing: dict[str, Any], *, ha_state: str | None, status: st
             health["first_unavailable_at"] = now_iso
         return
 
-    # ok runtime data
     health["last_ok_at"] = now_iso
     health["first_unavailable_at"] = None
     health["escalation"] = "none"
@@ -65,7 +63,6 @@ def _compute_escalation(existing: dict[str, Any], *, offline_grace_s: int, now: 
     status = ((existing.get("source") or {}).get("status") or "").lower()
     offline_s = int((now - first_unavail).total_seconds())
 
-    # not_provided => immediate warning (no grace)
     if status == "not_provided":
         health["escalation"] = "warning_15m"
         return
@@ -125,6 +122,13 @@ def merge_scan_into_catalogue(catalogue: dict[str, Any], scan: dict[str, Any], *
         _compute_escalation(existing, offline_grace_s=offline_grace_s, now=now_dt)
 
         items[item_id] = existing
+
+    # Ensure removed items never keep stale escalation between scans
+    for it in (items.values() or []):
+        if not isinstance(it, dict):
+            continue
+        if (it.get("triage") or {}).get("policy") == "removed":
+            it.setdefault("health", {})["escalation"] = "none"
 
     catalogue["generated_at"] = now_iso
     return catalogue
