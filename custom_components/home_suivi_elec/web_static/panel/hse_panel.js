@@ -1,5 +1,5 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-24_1656_diag_adv_mode";
+const build_signature = "2026-02-25_0003_diag_err_message";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -47,7 +47,7 @@ const build_signature = "2026-02-24_1656_diag_adv_mode";
         advanced: false,
         last_request: null,
         last_response: null,
-        last_action: null
+        last_action: null,
       };
 
       this._boot_done = false;
@@ -117,6 +117,18 @@ const build_signature = "2026-02-24_1656_diag_adv_mode";
       try {
         window.localStorage.setItem(key, value);
       } catch (_) {}
+    }
+
+    _err_msg(err) {
+      if (!err) return "?";
+      if (typeof err === "string") return err;
+      if (err.message) return String(err.message);
+      // Home Assistant often throws Response objects or plain objects
+      try {
+        return JSON.stringify(err);
+      } catch (_) {
+        return String(err);
+      }
     }
 
     async _boot() {
@@ -319,12 +331,11 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
           this._diag_state.last_response = resp;
           return resp;
         } catch (err) {
-          this._diag_state.last_response = { error: err?.message || String(err) };
+          this._diag_state.last_response = { error: this._err_msg(err) };
           throw err;
         }
       };
 
-      // Wrap diag api so advanced mode can show last request/response
       const diag_api = {
         fetch_catalogue: () => _call_api("GET", "home_suivi_elec/unified/catalogue"),
         refresh_catalogue: () => _call_api("POST", "home_suivi_elec/unified/catalogue/refresh", {}),
@@ -332,7 +343,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
           const path = `home_suivi_elec/unified/catalogue/item/${encodeURIComponent(item_id)}/triage`;
           return _call_api("POST", path, { triage });
         },
-        bulk_triage: (item_ids, triage) => _call_api("POST", "home_suivi_elec/unified/catalogue/triage/bulk", { item_ids, triage })
+        bulk_triage: (item_ids, triage) => _call_api("POST", "home_suivi_elec/unified/catalogue/triage/bulk", { item_ids, triage }),
       };
 
       if (!this._diag_state.data && !this._diag_state.loading) {
@@ -341,7 +352,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
           this._diag_state.data = await diag_api.fetch_catalogue();
           this._diag_state.error = null;
         } catch (err) {
-          this._diag_state.error = err?.message || String(err);
+          this._diag_state.error = this._err_msg(err);
         } finally {
           this._diag_state.loading = false;
         }
@@ -392,7 +403,6 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         if (action === "filter") {
           this._diag_state.filter_q = payload || "";
           this._storage_set("hse_diag_filter_q", this._diag_state.filter_q);
-          // UX: filter change => reset selection to avoid confusion
           this._diag_state.selected = {};
           this._storage_set("hse_diag_selected", "{}");
           this._render();
@@ -524,7 +534,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         try {
           this._overview_data = await window.hse_overview_api.fetch_manifest_and_ping(this._hass);
         } catch (err) {
-          this._overview_data = { error: err?.message || String(err) };
+          this._overview_data = { error: this._err_msg(err) };
         }
 
         this._render();
@@ -588,7 +598,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
               exclude_hse: true,
             });
           } catch (err) {
-            this._scan_result = { error: err?.message || String(err), integrations: [], candidates: [] };
+            this._scan_result = { error: this._err_msg(err), integrations: [], candidates: [] };
           } finally {
             this._scan_state.scan_running = false;
             this._render();
