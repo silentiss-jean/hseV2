@@ -3,7 +3,7 @@
   "issues": {
     "catalogue_offline": {
       "title": "Capteur indisponible depuis longtemps",
-      "description": "Le capteur **{entity_id}** est indisponible depuis {since}.\n\nActions possibles dans HSE → Diagnostic :\n- Mute (7/30/90j) pendant une période de dépannage.\n- Mark removed si le capteur a été retiré définitivement.\n\nTant que le capteur reste indisponible, HSE suspendra la publication/MAJ des dérivés (mode A) afin d'éviter de polluer les dashboards."
+      "description": "Le capteur **{entity_id}** est indisponible depuis {since}.\n\nActions possibles dans HSE → Diagnostic :\n- Mute (7/30/90j) pendant une période de dépannage.\n- Mark removed si le capteur a été retiré définitivement.\n\nNiveaux: warning après 15min (ou immédiat si not_provided), erreur après 24h, action requise après 48h."
     }
   }
 }

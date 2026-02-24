@@ -8,7 +8,6 @@
     }
   }
 
-  // Return local time ISO with offset, e.g. 2026-02-23T19:35:00+01:00
   function _local_iso_days_from_now(days) {
     const d = new Date();
     d.setDate(d.getDate() + days);
@@ -22,7 +21,6 @@
     const mi = pad(d.getMinutes());
     const ss = pad(d.getSeconds());
 
-    // getTimezoneOffset: minutes behind UTC (e.g. Paris winter = -60)
     const tzMin = -d.getTimezoneOffset();
     const sign = tzMin >= 0 ? "+" : "-";
     const tzAbs = Math.abs(tzMin);
@@ -32,13 +30,20 @@
     return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}${sign}${tzh}:${tzm}`;
   }
 
+  function _esc_label(esc) {
+    if (esc === "warning_15m") return "Warning (>=15 min ou not_provided)";
+    if (esc === "error_24h") return "Erreur (>=24h)";
+    if (esc === "action_48h") return "Action requise (>=48h)";
+    return String(esc || "none");
+  }
+
   function render_diagnostic(container, catalogue, on_action) {
     const { el, clear } = window.hse_dom;
     clear(container);
 
     const header = el("div", "hse_card");
     header.appendChild(el("div", null, "Diagnostic"));
-    header.appendChild(el("div", "hse_subtitle", "Erreurs 24h / Action requise 48h (catalogue persistant)."));
+    header.appendChild(el("div", "hse_subtitle", "Warnings >=15min (ou not_provided) / Erreurs 24h / Action requise 48h (catalogue persistant)."));
 
     const toolbar = el("div", "hse_toolbar");
     const btn_refresh = el("button", "hse_button hse_button_primary", "Refresh catalogue");
@@ -63,7 +68,13 @@
       const esc = item.health && item.health.escalation;
 
       card.appendChild(el("div", null, `${title}`));
-      card.appendChild(el("div", "hse_subtitle", `Escalation: ${esc}, since: ${_fmt_dt(item.health.first_unavailable_at)}`));
+      card.appendChild(
+        el(
+          "div",
+          "hse_subtitle",
+          `${_esc_label(esc)}; since: ${_fmt_dt(item.health.first_unavailable_at)}; status: ${(item.source && item.source.status) || "?"}; state: ${(item.source && item.source.last_seen_state) || "?"}`
+        )
+      );
 
       const actions = el("div", "hse_toolbar");
 

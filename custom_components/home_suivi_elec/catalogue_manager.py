@@ -29,7 +29,7 @@ def _update_health(existing: dict[str, Any], *, ha_state: str | None, status: st
     health = existing.setdefault("health", {})
 
     if status == "not_provided":
-        # Treat as permanently unavailable until user cleans it up.
+        # Treat as unavailable and escalate immediately.
         if not health.get("first_unavailable_at"):
             health["first_unavailable_at"] = now_iso
         return
@@ -48,7 +48,6 @@ def _update_health(existing: dict[str, Any], *, ha_state: str | None, status: st
 def _compute_escalation(existing: dict[str, Any], *, offline_grace_s: int, now: datetime) -> None:
     triage = existing.get("triage") or {}
     if triage.get("policy") == "removed":
-        # archived => no escalation
         existing.setdefault("health", {})["escalation"] = "none"
         return
 
@@ -63,7 +62,14 @@ def _compute_escalation(existing: dict[str, Any], *, offline_grace_s: int, now: 
         health["escalation"] = "none"
         return
 
+    status = ((existing.get("source") or {}).get("status") or "").lower()
     offline_s = int((now - first_unavail).total_seconds())
+
+    # not_provided => immediate warning (no grace)
+    if status == "not_provided":
+        health["escalation"] = "warning_15m"
+        return
+
     if offline_s < offline_grace_s:
         health["escalation"] = "none"
     elif offline_s >= 48 * 3600:
@@ -71,12 +77,10 @@ def _compute_escalation(existing: dict[str, Any], *, offline_grace_s: int, now: 
     elif offline_s >= 24 * 3600:
         health["escalation"] = "error_24h"
     else:
-        health["escalation"] = "none"
+        health["escalation"] = "warning_15m"
 
 
 def merge_scan_into_catalogue(catalogue: dict[str, Any], scan: dict[str, Any], *, offline_grace_s: int = 900) -> dict[str, Any]:
-    """Merge scan output into persistent catalogue."""
-
     items: dict[str, Any] = catalogue.setdefault("items", {})
     now_iso = utc_now_iso()
     now_dt = datetime.now(timezone.utc)
