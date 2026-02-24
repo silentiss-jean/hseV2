@@ -1,5 +1,5 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-24_1147_diag_bulk_v2";
+const build_signature = "2026-02-24_1656_diag_adv_mode";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -44,6 +44,10 @@ const build_signature = "2026-02-24_1147_diag_bulk_v2";
         error: null,
         filter_q: "",
         selected: {},
+        advanced: false,
+        last_request: null,
+        last_response: null,
+        last_action: null
       };
 
       this._boot_done = false;
@@ -91,6 +95,7 @@ const build_signature = "2026-02-24_1147_diag_bulk_v2";
       this._scan_state.open_all = (this._storage_get("hse_scan_open_all") || "0") === "1";
 
       this._diag_state.filter_q = this._storage_get("hse_diag_filter_q") || "";
+      this._diag_state.advanced = (this._storage_get("hse_diag_advanced") || "0") === "1";
       try {
         const rawSel = this._storage_get("hse_diag_selected");
         if (rawSel) this._diag_state.selected = JSON.parse(rawSel) || {};
@@ -305,10 +310,35 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         return;
       }
 
+      const _call_api = async (method, path, body) => {
+        const req = { method, path, body: body || null };
+        this._diag_state.last_request = req;
+        this._diag_state.last_action = { method, path };
+        try {
+          const resp = await this._hass.callApi(method, path, body || {});
+          this._diag_state.last_response = resp;
+          return resp;
+        } catch (err) {
+          this._diag_state.last_response = { error: err?.message || String(err) };
+          throw err;
+        }
+      };
+
+      // Wrap diag api so advanced mode can show last request/response
+      const diag_api = {
+        fetch_catalogue: () => _call_api("GET", "home_suivi_elec/unified/catalogue"),
+        refresh_catalogue: () => _call_api("POST", "home_suivi_elec/unified/catalogue/refresh", {}),
+        set_item_triage: (item_id, triage) => {
+          const path = `home_suivi_elec/unified/catalogue/item/${encodeURIComponent(item_id)}/triage`;
+          return _call_api("POST", path, { triage });
+        },
+        bulk_triage: (item_ids, triage) => _call_api("POST", "home_suivi_elec/unified/catalogue/triage/bulk", { item_ids, triage })
+      };
+
       if (!this._diag_state.data && !this._diag_state.loading) {
         this._diag_state.loading = true;
         try {
-          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          this._diag_state.data = await diag_api.fetch_catalogue();
           this._diag_state.error = null;
         } catch (err) {
           this._diag_state.error = err?.message || String(err);
@@ -330,11 +360,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       const _selected_ids = () => Object.keys(this._diag_state.selected || {}).filter((k) => this._diag_state.selected[k]);
 
       const _mute_until_days = (days) => {
-        // Use helper exposed by diagnostic.view.js
         const fn = window.hse_diag_view?._local_iso_days_from_now;
         if (fn) return fn(days);
 
-        // fallback
         const dd = new Date();
         dd.setDate(dd.getDate() + days);
         const pad = (n) => String(n).padStart(2, "0");
@@ -354,9 +382,19 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       };
 
       window.hse_diag_view.render_diagnostic(container, this._diag_state.data, this._diag_state, async (action, payload) => {
+        if (action === "toggle_advanced") {
+          this._diag_state.advanced = !this._diag_state.advanced;
+          this._storage_set("hse_diag_advanced", this._diag_state.advanced ? "1" : "0");
+          this._render();
+          return;
+        }
+
         if (action === "filter") {
           this._diag_state.filter_q = payload || "";
           this._storage_set("hse_diag_filter_q", this._diag_state.filter_q);
+          // UX: filter change => reset selection to avoid confusion
+          this._diag_state.selected = {};
+          this._storage_set("hse_diag_selected", "{}");
           this._render();
           return;
         }
@@ -396,8 +434,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
           const ok = window.confirm(`Appliquer MUTE ${days}j sur ${ids.length} item(s) (${mode}) ?`);
           if (!ok) return;
 
-          await window.hse_diag_api.bulk_triage(this._hass, ids, { mute_until });
-          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          await diag_api.bulk_triage(ids, { mute_until });
+          this._diag_state.data = await diag_api.fetch_catalogue();
           this._render();
           return;
         }
@@ -410,29 +448,29 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
           const ok = window.confirm(`Appliquer REMOVED sur ${ids.length} item(s) (${mode}) ?`);
           if (!ok) return;
 
-          await window.hse_diag_api.bulk_triage(this._hass, ids, { policy: "removed" });
-          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          await diag_api.bulk_triage(ids, { policy: "removed" });
+          this._diag_state.data = await diag_api.fetch_catalogue();
           this._render();
           return;
         }
 
         if (action === "refresh") {
-          await window.hse_diag_api.refresh_catalogue(this._hass);
-          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          await diag_api.refresh_catalogue();
+          this._diag_state.data = await diag_api.fetch_catalogue();
           this._render();
           return;
         }
 
         if (action === "mute") {
-          await window.hse_diag_api.set_item_triage(this._hass, payload.item_id, { mute_until: payload.mute_until });
-          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          await diag_api.set_item_triage(payload.item_id, { mute_until: payload.mute_until });
+          this._diag_state.data = await diag_api.fetch_catalogue();
           this._render();
           return;
         }
 
         if (action === "removed") {
-          await window.hse_diag_api.set_item_triage(this._hass, payload.item_id, { policy: "removed" });
-          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          await diag_api.set_item_triage(payload.item_id, { policy: "removed" });
+          this._diag_state.data = await diag_api.fetch_catalogue();
           this._render();
           return;
         }

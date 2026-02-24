@@ -57,7 +57,6 @@
       src.status,
       src.status_reason,
       src.last_seen_state,
-      // extra: allow searching by item_id too
       item.item_id,
     ]
       .filter(Boolean)
@@ -72,7 +71,6 @@
     const escalated = items
       .filter((x) => x.v.health && x.v.health.escalation && x.v.health.escalation !== "none")
       .filter((x) => {
-        // enrich item_id into object for search
         if (x.v && typeof x.v === "object") x.v.item_id = x.id;
         return _matches_q(x.v, filter_q);
       });
@@ -109,6 +107,10 @@
     q.value = state.filter_q || "";
     q.addEventListener("input", (ev) => on_action("filter", ev.target.value));
     toolbar.appendChild(q);
+
+    const btn_adv = el("button", "hse_button", state.advanced ? "Advanced: ON" : "Advanced: OFF");
+    btn_adv.addEventListener("click", () => on_action("toggle_advanced"));
+    toolbar.appendChild(btn_adv);
 
     const btn_sel_all = el("button", "hse_button", "Select all (filtré)");
     btn_sel_all.addEventListener("click", () => on_action("select_all_filtered"));
@@ -149,58 +151,91 @@
 
     if (!escalated.length) {
       container.appendChild(el("div", "hse_card", "Aucune alerte (avec ce filtre)."));
-      return;
+    } else {
+      for (const it of escalated) {
+        const item = it.v;
+        const card = el("div", "hse_card");
+
+        const row = el("div", "hse_toolbar");
+        const cb = el("input");
+        cb.type = "checkbox";
+        cb.checked = !!(state.selected && state.selected[it.id]);
+        cb.addEventListener("change", (ev) => on_action("select", { item_id: it.id, checked: ev.target.checked }));
+        row.appendChild(cb);
+
+        const title = el("div", null, (item.source && item.source.entity_id) || it.id);
+        title.style.flex = "1";
+        row.appendChild(title);
+        card.appendChild(row);
+
+        const esc = item.health && item.health.escalation;
+        card.appendChild(
+          el(
+            "div",
+            "hse_subtitle",
+            `${_esc_label(esc)}; since: ${_fmt_dt(item.health.first_unavailable_at)}; status: ${(item.source && item.source.status) || "?"}; state: ${(item.source && item.source.last_seen_state) || "?"}; integration: ${(item.source && item.source.integration_domain) || (item.source && item.source.platform) || "?"}`
+          )
+        );
+
+        const actions = el("div", "hse_toolbar");
+
+        const b7 = el("button", "hse_button", "Mute 7j");
+        b7.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(7) }));
+
+        const b30 = el("button", "hse_button", "Mute 30j");
+        b30.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(30) }));
+
+        const b90 = el("button", "hse_button", "Mute 90j");
+        b90.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(90) }));
+
+        const brm = el("button", "hse_button", "Mark removed");
+        brm.addEventListener("click", () => on_action("removed", { item_id: it.id }));
+
+        actions.appendChild(b7);
+        actions.appendChild(b30);
+        actions.appendChild(b90);
+        actions.appendChild(brm);
+
+        card.appendChild(actions);
+        container.appendChild(card);
+      }
     }
 
-    for (const it of escalated) {
-      const item = it.v;
-      const card = el("div", "hse_card");
+    if (state.advanced) {
+      const adv = el("div", "hse_card");
+      adv.appendChild(el("div", null, "Advanced"));
+      adv.appendChild(el("div", "hse_subtitle", "Dernière requête API (method/path/body) et réponse brute."));
+      const pre = el("pre");
+      pre.style.whiteSpace = "pre-wrap";
+      pre.style.wordBreak = "break-word";
+      const payload = {
+        last_action: state.last_action,
+        last_request: state.last_request,
+        last_response: state.last_response
+      };
+      pre.textContent = JSON.stringify(payload, null, 2);
+      adv.appendChild(pre);
+      container.appendChild(adv);
 
-      const row = el("div", "hse_toolbar");
-      const cb = el("input");
-      cb.type = "checkbox";
-      cb.checked = !!(state.selected && state.selected[it.id]);
-      cb.addEventListener("change", (ev) => on_action("select", { item_id: it.id, checked: ev.target.checked }));
-      row.appendChild(cb);
-
-      const title = el("div", null, (item.source && item.source.entity_id) || it.id);
-      title.style.flex = "1";
-      row.appendChild(title);
-      card.appendChild(row);
-
-      const esc = item.health && item.health.escalation;
-      card.appendChild(
-        el(
-          "div",
-          "hse_subtitle",
-          `${_esc_label(esc)}; since: ${_fmt_dt(item.health.first_unavailable_at)}; status: ${(item.source && item.source.status) || "?"}; state: ${(item.source && item.source.last_seen_state) || "?"}; integration: ${(item.source && item.source.integration_domain) || (item.source && item.source.platform) || "?"}`
-        )
-      );
-
-      const actions = el("div", "hse_toolbar");
-
-      const b7 = el("button", "hse_button", "Mute 7j");
-      b7.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(7) }));
-
-      const b30 = el("button", "hse_button", "Mute 30j");
-      b30.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(30) }));
-
-      const b90 = el("button", "hse_button", "Mute 90j");
-      b90.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(90) }));
-
-      const brm = el("button", "hse_button", "Mark removed");
-      brm.addEventListener("click", () => on_action("removed", { item_id: it.id }));
-
-      actions.appendChild(b7);
-      actions.appendChild(b30);
-      actions.appendChild(b90);
-      actions.appendChild(brm);
-
-      card.appendChild(actions);
-      container.appendChild(card);
+      const adv2 = el("div", "hse_card");
+      adv2.appendChild(el("div", null, "Commandes utiles (curl)"));
+      const pre2 = el("pre");
+      pre2.style.whiteSpace = "pre-wrap";
+      pre2.style.wordBreak = "break-word";
+      pre2.textContent = [
+        "# 1) Voir toutes les alertes (escalation != none)",
+        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.health.escalation!="none") | {item_id:.key, entity_id:.value.source.entity_id, esc:.value.health.escalation, status:.value.source.status, integration:.value.source.integration_domain}'",
+        "",
+        "# 2) Voir les items removed",
+        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.policy=="removed") | {item_id:.key, entity_id:.value.source.entity_id, policy:.value.triage.policy}'",
+        "",
+        "# 3) Voir les items muted (actifs)",
+        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.mute_until!=null) | {item_id:.key, entity_id:.value.source.entity_id, mute_until:.value.triage.mute_until}'"
+      ].join("\n");
+      adv2.appendChild(pre2);
+      container.appendChild(adv2);
     }
 
-    // Expose helper for panel bulk mute
     window.hse_diag_view._local_iso_days_from_now = _local_iso_days_from_now;
     window.hse_diag_view._filtered_escalated_items = _filtered_escalated_items;
   }
