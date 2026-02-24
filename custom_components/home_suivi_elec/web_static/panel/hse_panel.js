@@ -1,17 +1,11 @@
-/*
-HSE_DOC: custom_components/home_suivi_elec/docs/hse_panel.md
-HSE_MAINTENANCE: If you change boot/load/auth/state persistence contracts, update the doc above.
-*/
-
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-23_1834_diag_repairs";
+const build_signature = "2026-02-24_1139_diag_bulk";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
-  // Bump pour casser le cache (scripts + css)
-  // IMPORTANT: doit matcher le cache-buster backend (const.py PANEL_JS_URL)
+  // IMPORTANT: must match const.py PANEL_JS_URL
   const ASSET_V = "0.1.8";
 
   const NAV_ITEMS_FALLBACK = [
@@ -48,6 +42,8 @@ const build_signature = "2026-02-23_1834_diag_repairs";
         loading: false,
         data: null,
         error: null,
+        filter_q: "",
+        selected: {},
       };
 
       this._boot_done = false;
@@ -93,6 +89,13 @@ const build_signature = "2026-02-23_1834_diag_repairs";
         if (raw) this._scan_state.groups_open = JSON.parse(raw) || {};
       } catch (_) {}
       this._scan_state.open_all = (this._storage_get("hse_scan_open_all") || "0") === "1";
+
+      // Diagnostic UI state persistence
+      this._diag_state.filter_q = this._storage_get("hse_diag_filter_q") || "";
+      try {
+        const rawSel = this._storage_get("hse_diag_selected");
+        if (rawSel) this._diag_state.selected = JSON.parse(rawSel) || {};
+      } catch (_) {}
 
       this._root = this.attachShadow({ mode: "open" });
       this._boot();
@@ -325,7 +328,54 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         return;
       }
 
-      window.hse_diag_view.render_diagnostic(container, this._diag_state.data, async (action, payload) => {
+      window.hse_diag_view.render_diagnostic(container, this._diag_state.data, this._diag_state, async (action, payload) => {
+        if (action === "filter") {
+          this._diag_state.filter_q = payload || "";
+          this._storage_set("hse_diag_filter_q", this._diag_state.filter_q);
+          this._render();
+          return;
+        }
+
+        if (action === "select") {
+          if (payload && payload.item_id) {
+            this._diag_state.selected[payload.item_id] = !!payload.checked;
+            this._storage_set("hse_diag_selected", JSON.stringify(this._diag_state.selected));
+          }
+          this._render();
+          return;
+        }
+
+        const _selected_ids = () => Object.keys(this._diag_state.selected || {}).filter((k) => this._diag_state.selected[k]);
+
+        if (action === "bulk_mute") {
+          const ids = _selected_ids();
+          if (!ids.length) return;
+          await window.hse_diag_api.bulk_triage(this._hass, ids, { mute_until: payload?.days ? window.hse_diag_view._local_iso_days_from_now?.(payload.days) : null });
+          // fallback: compute here
+          const d = payload?.days || 7;
+          const mute_until = (function(){
+            const dd = new Date(); dd.setDate(dd.getDate()+d);
+            const pad=(n)=>String(n).padStart(2,"0");
+            const yyyy=dd.getFullYear(),mm=pad(dd.getMonth()+1),da=pad(dd.getDate()),hh=pad(dd.getHours()),mi=pad(dd.getMinutes()),ss=pad(dd.getSeconds());
+            const tzMin=-dd.getTimezoneOffset(); const sign=tzMin>=0?"+":"-"; const tzAbs=Math.abs(tzMin);
+            const tzh=pad(Math.floor(tzAbs/60)),tzm=pad(tzAbs%60);
+            return `${yyyy}-${mm}-${da}T${hh}:${mi}:${ss}${sign}${tzh}:${tzm}`;
+          })();
+          await window.hse_diag_api.bulk_triage(this._hass, ids, { mute_until });
+          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          this._render();
+          return;
+        }
+
+        if (action === "bulk_removed") {
+          const ids = _selected_ids();
+          if (!ids.length) return;
+          await window.hse_diag_api.bulk_triage(this._hass, ids, { policy: "removed" });
+          this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);
+          this._render();
+          return;
+        }
+
         if (action === "refresh") {
           await window.hse_diag_api.refresh_catalogue(this._hass);
           this._diag_state.data = await window.hse_diag_api.fetch_catalogue(this._hass);

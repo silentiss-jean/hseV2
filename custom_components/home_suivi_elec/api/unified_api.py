@@ -8,6 +8,7 @@ from __future__ import annotations
 from .views.catalogue_get import CatalogueGetView
 from .views.catalogue_item_triage import CatalogueItemTriageView
 from .views.catalogue_refresh import CatalogueRefreshView
+from .views.catalogue_triage_bulk import CatalogueTriageBulkView
 from .views.entities_scan import EntitiesScanView
 from .views.frontend_manifest import FrontendManifestView
 from .views.ping import PingView
@@ -20,3 +21,4 @@ def async_register_unified_api(hass) -> None:
     hass.http.register_view(CatalogueGetView())
     hass.http.register_view(CatalogueRefreshView())
     hass.http.register_view(CatalogueItemTriageView())
+    hass.http.register_view(CatalogueTriageBulkView())

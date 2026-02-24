@@ -12,5 +12,9 @@
     return hass.callApi("POST", path, { triage });
   }
 
-  window.hse_diag_api = { fetch_catalogue, refresh_catalogue, set_item_triage };
+  async function bulk_triage(hass, item_ids, triage) {
+    return hass.callApi("POST", "home_suivi_elec/unified/catalogue/triage/bulk", { item_ids, triage });
+  }
+
+  window.hse_diag_api = { fetch_catalogue, refresh_catalogue, set_item_triage, bulk_triage };
 })();
