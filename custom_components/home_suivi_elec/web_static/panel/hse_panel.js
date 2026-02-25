@@ -1,5 +1,5 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-25_0003_diag_err_message";
+const build_signature = "2026-02-25_1448_diag_use_diag_api";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -123,7 +123,6 @@ const build_signature = "2026-02-25_0003_diag_err_message";
       if (!err) return "?";
       if (typeof err === "string") return err;
       if (err.message) return String(err.message);
-      // Home Assistant often throws Response objects or plain objects
       try {
         return JSON.stringify(err);
       } catch (_) {
@@ -322,12 +321,18 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         return;
       }
 
-      const _call_api = async (method, path, body) => {
-        const req = { method, path, body: body || null };
-        this._diag_state.last_request = req;
-        this._diag_state.last_action = { method, path };
+      const diag_api = {
+        fetch_catalogue: () => window.hse_diag_api.fetch_catalogue(this._hass),
+        refresh_catalogue: () => window.hse_diag_api.refresh_catalogue(this._hass),
+        set_item_triage: (item_id, triage) => window.hse_diag_api.set_item_triage(this._hass, item_id, triage),
+        bulk_triage: (item_ids, triage) => window.hse_diag_api.bulk_triage(this._hass, item_ids, triage),
+      };
+
+      const _wrap_last = async (label, fn) => {
         try {
-          const resp = await this._hass.callApi(method, path, body || {});
+          this._diag_state.last_action = label;
+          this._diag_state.last_request = null;
+          const resp = await fn();
           this._diag_state.last_response = resp;
           return resp;
         } catch (err) {
@@ -336,20 +341,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         }
       };
 
-      const diag_api = {
-        fetch_catalogue: () => _call_api("GET", "home_suivi_elec/unified/catalogue"),
-        refresh_catalogue: () => _call_api("POST", "home_suivi_elec/unified/catalogue/refresh", {}),
-        set_item_triage: (item_id, triage) => {
-          const path = `home_suivi_elec/unified/catalogue/item/${encodeURIComponent(item_id)}/triage`;
-          return _call_api("POST", path, { triage });
-        },
-        bulk_triage: (item_ids, triage) => _call_api("POST", "home_suivi_elec/unified/catalogue/triage/bulk", { item_ids, triage }),
-      };
-
       if (!this._diag_state.data && !this._diag_state.loading) {
         this._diag_state.loading = true;
         try {
-          this._diag_state.data = await diag_api.fetch_catalogue();
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
           this._diag_state.error = null;
         } catch (err) {
           this._diag_state.error = this._err_msg(err);
@@ -444,8 +439,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
           const ok = window.confirm(`Appliquer MUTE ${days}j sur ${ids.length} item(s) (${mode}) ?`);
           if (!ok) return;
 
-          await diag_api.bulk_triage(ids, { mute_until });
-          this._diag_state.data = await diag_api.fetch_catalogue();
+          await _wrap_last("bulk_triage/mute", () => diag_api.bulk_triage(ids, { mute_until }));
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
           this._render();
           return;
         }
@@ -458,29 +453,29 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
           const ok = window.confirm(`Appliquer REMOVED sur ${ids.length} item(s) (${mode}) ?`);
           if (!ok) return;
 
-          await diag_api.bulk_triage(ids, { policy: "removed" });
-          this._diag_state.data = await diag_api.fetch_catalogue();
+          await _wrap_last("bulk_triage/removed", () => diag_api.bulk_triage(ids, { policy: "removed" }));
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
           this._render();
           return;
         }
 
         if (action === "refresh") {
-          await diag_api.refresh_catalogue();
-          this._diag_state.data = await diag_api.fetch_catalogue();
+          await _wrap_last("refresh_catalogue", () => diag_api.refresh_catalogue());
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
           this._render();
           return;
         }
 
         if (action === "mute") {
-          await diag_api.set_item_triage(payload.item_id, { mute_until: payload.mute_until });
-          this._diag_state.data = await diag_api.fetch_catalogue();
+          await _wrap_last("set_item_triage/mute", () => diag_api.set_item_triage(payload.item_id, { mute_until: payload.mute_until }));
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
           this._render();
           return;
         }
 
         if (action === "removed") {
-          await diag_api.set_item_triage(payload.item_id, { policy: "removed" });
-          this._diag_state.data = await diag_api.fetch_catalogue();
+          await _wrap_last("set_item_triage/removed", () => diag_api.set_item_triage(payload.item_id, { policy: "removed" }));
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
           this._render();
           return;
         }
