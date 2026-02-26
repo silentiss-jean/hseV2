@@ -32,6 +32,13 @@ Behavior:
   - `PingView()`
   - `FrontendManifestView()`
   - `EntitiesScanView()`
+  - `CatalogueGetView()`
+  - `CatalogueRefreshView()`
+  - `CatalogueItemTriageView()`
+  - `CatalogueTriageBulkView()`
+  - `CatalogueReferenceTotalView()`
+  - `EnrichPreviewView()`
+  - `EnrichApplyView()`
 
 Each view is registered using:
 

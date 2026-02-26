@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from .views.catalogue_get import CatalogueGetView
 from .views.catalogue_item_triage import CatalogueItemTriageView
+from .views.catalogue_reference_total import CatalogueReferenceTotalView
 from .views.catalogue_refresh import CatalogueRefreshView
 from .views.catalogue_triage_bulk import CatalogueTriageBulkView
 from .views.enrich_apply import EnrichApplyView
@@ -24,5 +25,6 @@ def async_register_unified_api(hass) -> None:
     hass.http.register_view(CatalogueRefreshView())
     hass.http.register_view(CatalogueItemTriageView())
     hass.http.register_view(CatalogueTriageBulkView())
+    hass.http.register_view(CatalogueReferenceTotalView())
     hass.http.register_view(EnrichPreviewView())
     hass.http.register_view(EnrichApplyView())

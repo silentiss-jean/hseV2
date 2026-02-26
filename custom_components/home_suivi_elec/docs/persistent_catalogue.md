@@ -40,6 +40,17 @@ Each item keeps:
 - `health.*`: offline tracking and escalation state
 - `triage.*`: user triage (mute / removed)
 
+### enrichment
+
+Common keys (non exhaustive):
+
+- `include` (bool): if true, this item is part of "measured totals" aggregations.
+- `is_reference_total` (bool): marks the "main meter" / "compteur" total.
+
+Invariant:
+
+- If `is_reference_total = true`, this item must be excluded from measured totals (backend should force `include = false`).
+
 ### health
 
 - `first_unavailable_at`: first time we observed `unknown/unavailable` (or `not_provided`)
