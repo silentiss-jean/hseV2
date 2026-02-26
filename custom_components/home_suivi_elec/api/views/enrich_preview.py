@@ -17,7 +17,7 @@ _SUFFIX_STRIP = (
 )
 
 
-def _derive_base_slug(power_entity_id: str) -> str:
+def derive_base_slug(power_entity_id: str) -> str:
     """Derive base sensor slug from a power sensor entity_id.
 
     Example:
@@ -64,7 +64,7 @@ class EnrichPreviewView(HomeAssistantView):
         errors: list[dict] = []
 
         try:
-            base = _derive_base_slug(power_entity_id)
+            base = derive_base_slug(power_entity_id)
         except Exception as exc:  # noqa: BLE001
             base = None
             decisions_required.append(
