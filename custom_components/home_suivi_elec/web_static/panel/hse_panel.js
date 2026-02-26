@@ -1,5 +1,5 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-26_1321_enrich_tab";
+const build_signature = "2026-02-26_1622_config_tab";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -55,6 +55,17 @@ const build_signature = "2026-02-26_1321_enrich_tab";
         running: false,
         error: null,
         last_result: null,
+      };
+
+      this._config_state = {
+        loading: false,
+        saving: false,
+        error: null,
+        message: null,
+        scan_result: { integrations: [], candidates: [] },
+        catalogue: null,
+        current_reference_entity_id: null,
+        selected_reference_entity_id: null,
       };
 
       this._boot_done = false;
@@ -177,6 +188,9 @@ const build_signature = "2026-02-26_1321_enrich_tab";
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/enrich/enrich.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/enrich/enrich.view.js?v=${ASSET_V}`);
 
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/config/config.api.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/config/config.view.js?v=${ASSET_V}`);
+
         const css_tokens = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_tokens.shadow.css?v=${ASSET_V}`);
         const css_themes = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_themes.shadow.css?v=${ASSET_V}`);
         const css_alias = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_alias.v2.css?v=${ASSET_V}`);
@@ -280,6 +294,9 @@ const build_signature = "2026-02-26_1321_enrich_tab";
         case "enrich":
           this._render_enrich();
           return;
+        case "config":
+          this._render_config();
+          return;
         case "custom":
           this._render_custom();
           return;
@@ -307,6 +324,143 @@ const build_signature = "2026-02-26_1321_enrich_tab";
       card.appendChild(el("div", null, title));
       card.appendChild(el("div", "hse_subtitle", subtitle || "À venir."));
       this._ui.content.appendChild(card);
+    }
+
+    async _render_config() {
+      const container = this._ui.content;
+
+      if (!window.hse_config_view || !window.hse_config_api || !window.hse_scan_api) {
+        this._render_placeholder("Configuration", "config.view.js non chargé.");
+        return;
+      }
+
+      const _update_from_catalogue = (cat) => {
+        this._config_state.catalogue = cat;
+        const cur = window.hse_config_view._current_reference_entity_id(cat);
+        this._config_state.current_reference_entity_id = cur;
+        if (this._config_state.selected_reference_entity_id == null) {
+          this._config_state.selected_reference_entity_id = cur;
+        }
+      };
+
+      if (!this._config_state.catalogue && !this._config_state.loading) {
+        this._config_state.loading = true;
+        this._config_state.error = null;
+        this._config_state.message = null;
+        this._render();
+
+        try {
+          this._config_state.scan_result = await window.hse_scan_api.fetch_scan(this._hass, {
+            include_disabled: false,
+            exclude_hse: true,
+          });
+
+          const cat = await window.hse_config_api.fetch_catalogue(this._hass);
+          _update_from_catalogue(cat);
+        } catch (err) {
+          this._config_state.error = this._err_msg(err);
+        } finally {
+          this._config_state.loading = false;
+          this._render();
+        }
+        return;
+      }
+
+      window.hse_config_view.render_config(container, this._config_state, async (action, value) => {
+        if (action === "select_reference") {
+          this._config_state.selected_reference_entity_id = value;
+          this._config_state.message = null;
+          this._render();
+          return;
+        }
+
+        if (action === "refresh") {
+          this._config_state.loading = true;
+          this._config_state.error = null;
+          this._config_state.message = null;
+          this._render();
+
+          try {
+            // refresh catalogue first so reference_total endpoint can resolve entity_id
+            await window.hse_config_api.refresh_catalogue(this._hass);
+
+            this._config_state.scan_result = await window.hse_scan_api.fetch_scan(this._hass, {
+              include_disabled: false,
+              exclude_hse: true,
+            });
+
+            const cat = await window.hse_config_api.fetch_catalogue(this._hass);
+            _update_from_catalogue(cat);
+          } catch (err) {
+            this._config_state.error = this._err_msg(err);
+          } finally {
+            this._config_state.loading = false;
+            this._render();
+          }
+          return;
+        }
+
+        if (action === "clear_reference") {
+          const ok = window.confirm("Supprimer la référence compteur ?");
+          if (!ok) return;
+
+          this._config_state.saving = true;
+          this._config_state.error = null;
+          this._config_state.message = null;
+          this._render();
+
+          try {
+            await window.hse_config_api.set_reference_total(this._hass, null);
+            const cat = await window.hse_config_api.fetch_catalogue(this._hass);
+            _update_from_catalogue(cat);
+            this._config_state.selected_reference_entity_id = null;
+            this._config_state.message = "Référence supprimée.";
+          } catch (err) {
+            this._config_state.error = this._err_msg(err);
+          } finally {
+            this._config_state.saving = false;
+            this._render();
+          }
+          return;
+        }
+
+        if (action === "save_reference") {
+          const entity_id = this._config_state.selected_reference_entity_id;
+          if (!entity_id) {
+            this._config_state.message = "Aucune référence sélectionnée (rien à sauvegarder).";
+            this._render();
+            return;
+          }
+
+          const ok = window.confirm(`Définir la référence compteur sur ${entity_id} ?\n(Elle sera exclue des totaux mesurés)`);
+          if (!ok) return;
+
+          this._config_state.saving = true;
+          this._config_state.error = null;
+          this._config_state.message = null;
+          this._render();
+
+          try {
+            try {
+              await window.hse_config_api.set_reference_total(this._hass, entity_id);
+            } catch (err) {
+              // common case: catalogue not yet containing the entity_id
+              await window.hse_config_api.refresh_catalogue(this._hass);
+              await window.hse_config_api.set_reference_total(this._hass, entity_id);
+            }
+
+            const cat = await window.hse_config_api.fetch_catalogue(this._hass);
+            _update_from_catalogue(cat);
+            this._config_state.message = "Référence sauvegardée.";
+          } catch (err) {
+            this._config_state.error = this._err_msg(err);
+          } finally {
+            this._config_state.saving = false;
+            this._render();
+          }
+          return;
+        }
+      });
     }
 
     async _render_enrich() {
