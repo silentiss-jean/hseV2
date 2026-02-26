@@ -1,5 +1,5 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-26_1622_config_tab";
+const build_signature = "2026-02-26_1735_config_renderfix";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -83,7 +83,13 @@ const build_signature = "2026-02-26_1622_config_tab";
 
     set hass(hass) {
       this._hass = hass;
+
+      // IMPORTANT: avoid tearing down interactive UI controls on frequent hass updates.
+      // Otherwise <select> and other inputs close/reset while the user interacts.
       if (this._active_tab === "custom") return;
+      if (this._active_tab === "config") return;
+      if (this._active_tab === "enrich") return;
+
       this._render();
     }
 
@@ -368,9 +374,10 @@ const build_signature = "2026-02-26_1622_config_tab";
 
       window.hse_config_view.render_config(container, this._config_state, async (action, value) => {
         if (action === "select_reference") {
+          // IMPORTANT: do not re-render on each selection change.
+          // Rendering clears the container, which recreates the <select> and closes it.
           this._config_state.selected_reference_entity_id = value;
           this._config_state.message = null;
-          this._render();
           return;
         }
 
@@ -505,6 +512,8 @@ const build_signature = "2026-02-26_1622_config_tab";
         }
       });
     }
+
+    // (rest of file unchanged)
 
     async _render_diagnostic() {
       const { el } = window.hse_dom;
