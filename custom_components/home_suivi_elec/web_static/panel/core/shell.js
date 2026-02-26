@@ -40,13 +40,14 @@ HSE_MAINTENANCE: If you change navigation items or shell DOM contracts, update t
     // ids = routes internes (features)
     return [
       { id: "overview", label: "Accueil" },
-      { id: "diagnostic", label: "Diagnostic" },       // placeholder
-      { id: "scan", label: "Détection" },              // ton scan
-      { id: "config", label: "Configuration" },        // placeholder
-      { id: "custom", label: "Customisation" },        // placeholder
-      { id: "cards", label: "Génération cartes" },     // placeholder
-      { id: "migration", label: "Migration capteurs" },// placeholder
-      { id: "costs", label: "Analyse de coûts" },      // placeholder
+      { id: "diagnostic", label: "Diagnostic" },
+      { id: "scan", label: "Détection" },
+      { id: "enrich", label: "Enrichissement" },
+      { id: "config", label: "Configuration" },
+      { id: "custom", label: "Customisation" },
+      { id: "cards", label: "Génération cartes" },
+      { id: "migration", label: "Migration capteurs" },
+      { id: "costs", label: "Analyse de coûts" },
     ];
   }
 

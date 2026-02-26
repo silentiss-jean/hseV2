@@ -1,5 +1,5 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-25_1448_diag_use_diag_api";
+const build_signature = "2026-02-26_1321_enrich_tab";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -12,6 +12,7 @@ const build_signature = "2026-02-25_1448_diag_use_diag_api";
     { id: "overview", label: "Accueil" },
     { id: "diagnostic", label: "Diagnostic" },
     { id: "scan", label: "Détection" },
+    { id: "enrich", label: "Enrichissement" },
     { id: "config", label: "Configuration" },
     { id: "custom", label: "Customisation" },
     { id: "cards", label: "Génération cartes" },
@@ -48,6 +49,12 @@ const build_signature = "2026-02-25_1448_diag_use_diag_api";
         last_request: null,
         last_response: null,
         last_action: null,
+      };
+
+      this._enrich_state = {
+        running: false,
+        error: null,
+        last_result: null,
       };
 
       this._boot_done = false;
@@ -167,20 +174,15 @@ const build_signature = "2026-02-25_1448_diag_use_diag_api";
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/diagnostic/diagnostic.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/diagnostic/diagnostic.view.js?v=${ASSET_V}`);
 
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/enrich/enrich.api.js?v=${ASSET_V}`);
+        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/enrich/enrich.view.js?v=${ASSET_V}`);
+
         const css_tokens = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_tokens.shadow.css?v=${ASSET_V}`);
         const css_themes = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_themes.shadow.css?v=${ASSET_V}`);
         const css_alias = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/hse_alias.v2.css?v=${ASSET_V}`);
         const css_panel = await window.hse_loader.load_css_text(`${SHARED_BASE}/styles/tokens.css?v=${ASSET_V}`);
 
-        this._root.innerHTML = `<style>
-${css_tokens}
-
-${css_themes}
-
-${css_alias}
-
-${css_panel}
-</style><div id="root"></div>`;
+        this._root.innerHTML = `<style>\n${css_tokens}\n\n${css_themes}\n\n${css_alias}\n\n${css_panel}\n</style><div id=\"root\"></div>`;
 
         this._boot_done = true;
         this._boot_error = null;
@@ -188,15 +190,7 @@ ${css_panel}
         this._boot_error = err?.message || String(err);
         console.error("[HSE] boot error", err);
 
-        this._root.innerHTML = `<style>
-:host{display:block;padding:16px;font-family:system-ui;color:var(--primary-text-color);}
-pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding:12px;border-radius:10px;}
-</style>
-<div>
-  <div style="font-size:18px">Home Suivi Elec</div>
-  <div style="opacity:.8">Boot error</div>
-  <pre>${this._escape_html(this._boot_error)}</pre>
-</div>`;
+        this._root.innerHTML = `<style>\n:host{display:block;padding:16px;font-family:system-ui;color:var(--primary-text-color);}\npre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding:12px;border-radius:10px;}\n</style>\n<div>\n  <div style=\"font-size:18px\">Home Suivi Elec</div>\n  <div style=\"opacity:.8\">Boot error</div>\n  <pre>${this._escape_html(this._boot_error)}</pre>\n</div>`;
       } finally {
         this._render();
       }
@@ -283,6 +277,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
         case "scan":
           this._render_scan();
           return;
+        case "enrich":
+          this._render_enrich();
+          return;
         case "custom":
           this._render_custom();
           return;
@@ -310,6 +307,49 @@ pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.2);padding
       card.appendChild(el("div", null, title));
       card.appendChild(el("div", "hse_subtitle", subtitle || "À venir."));
       this._ui.content.appendChild(card);
+    }
+
+    async _render_enrich() {
+      const container = this._ui.content;
+
+      if (!window.hse_enrich_view || !window.hse_enrich_api) {
+        this._render_placeholder("Enrichissement", "enrich.view.js non chargé.");
+        return;
+      }
+
+      const api = {
+        preview: (payload) => window.hse_enrich_api.preview(this._hass, payload),
+        apply: (payload) => window.hse_enrich_api.apply(this._hass, payload),
+      };
+
+      window.hse_enrich_view.render_enrich(container, this._enrich_state, async (action) => {
+        if (action !== "run") return;
+
+        this._enrich_state.running = true;
+        this._enrich_state.error = null;
+        this._enrich_state.last_result = null;
+        this._render();
+
+        try {
+          const preview = await api.preview({});
+          if (preview?.summary?.decisions_required_count > 0 || preview?.summary?.errors_count > 0) {
+            const ok = window.confirm(
+              `Décisions requises: ${preview?.summary?.decisions_required_count || 0} / Erreurs: ${preview?.summary?.errors_count || 0}. Ouvrir le détail ?`
+            );
+            this._enrich_state.last_result = preview;
+            if (!ok) return;
+            return;
+          }
+
+          const applied = await api.apply({});
+          this._enrich_state.last_result = { preview, applied };
+        } catch (err) {
+          this._enrich_state.error = this._err_msg(err);
+        } finally {
+          this._enrich_state.running = false;
+          this._render();
+        }
+      });
     }
 
     async _render_diagnostic() {
