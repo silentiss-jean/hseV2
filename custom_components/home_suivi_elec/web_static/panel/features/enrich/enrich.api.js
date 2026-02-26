@@ -1,6 +1,8 @@
 /* enrich.api.js */
 (function () {
-  const BASE = "/api/home_suivi_elec/unified/enrich";
+  // hass.callApi() prefixes the path with /api.
+  // So here we must NOT start with /api, otherwise we end up calling /api//api/...
+  const BASE = "home_suivi_elec/unified/enrich";
 
   async function preview(hass, payload) {
     return hass.callApi("post", `${BASE}/preview`, payload || {});
