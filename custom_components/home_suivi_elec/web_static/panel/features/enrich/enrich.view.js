@@ -73,7 +73,6 @@
 
     wrap.appendChild(badges);
 
-    // Small hint: show selected entity id if present
     const power_entity_id = preview?.input?.power_entity_id;
     if (power_entity_id) {
       wrap.appendChild(el("div", "hse_subtitle", `Capteur power: ${power_entity_id}`));
@@ -82,7 +81,9 @@
     card.appendChild(wrap);
   }
 
-  function _fold(title, obj, *, open = false) {
+  function _fold(title, obj, opts) {
+    const open = !!(opts && opts.open);
+
     const details = document.createElement("details");
     details.className = "hse_fold";
     if (open) details.open = true;
