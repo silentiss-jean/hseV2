@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-27_1400_pricing_ui";
+const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.9";
+  const ASSET_V = "0.1.10";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -407,6 +407,20 @@ const build_signature = "2026-02-27_1400_pricing_ui";
           cur[parts[parts.length - 1]] = v;
         };
 
+        const _ensure_pricing_draft = () => {
+          if (!this._config_state.pricing_draft) {
+            this._config_state.pricing_draft = JSON.parse(
+              JSON.stringify(this._config_state.pricing || this._config_state.pricing_defaults || {})
+            );
+          }
+        };
+
+        const _cost_ids = () => {
+          _ensure_pricing_draft();
+          const arr = this._config_state.pricing_draft?.cost_entity_ids;
+          return Array.isArray(arr) ? arr : [];
+        };
+
         if (action === "select_reference") {
           // IMPORTANT: do not re-render on each selection change.
           // Rendering clears the container, which recreates the <select> and closes it.
@@ -420,15 +434,36 @@ const build_signature = "2026-02-27_1400_pricing_ui";
           const v = value?.value;
           const no_render = value?.no_render === true;
 
-          if (!this._config_state.pricing_draft) {
-            this._config_state.pricing_draft = JSON.parse(JSON.stringify(this._config_state.pricing || this._config_state.pricing_defaults || {}));
-          }
+          _ensure_pricing_draft();
 
           _deep_set(this._config_state.pricing_draft, path, v);
           this._config_state.pricing_message = null;
           this._config_state.pricing_error = null;
 
           if (!no_render) this._render();
+          return;
+        }
+
+        if (action === "pricing_list_add") {
+          const eid = value?.entity_id;
+          if (!eid) return;
+          const ids = _cost_ids();
+          if (!ids.includes(eid)) ids.push(eid);
+          this._config_state.pricing_draft.cost_entity_ids = ids;
+          this._config_state.pricing_message = null;
+          this._config_state.pricing_error = null;
+          this._render();
+          return;
+        }
+
+        if (action === "pricing_list_remove") {
+          const eid = value?.entity_id;
+          if (!eid) return;
+          const ids = _cost_ids().filter((x) => x !== eid);
+          this._config_state.pricing_draft.cost_entity_ids = ids;
+          this._config_state.pricing_message = null;
+          this._config_state.pricing_error = null;
+          this._render();
           return;
         }
 

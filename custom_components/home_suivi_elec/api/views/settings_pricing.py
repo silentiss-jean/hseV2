@@ -7,6 +7,9 @@ This stores user-supplied pricing in the persistent catalogue under:
 - cat["settings"]["pricing"]
 
 We explicitly store both HT and TTC values; we never infer VAT.
+
+Extensions:
+- pricing["cost_entity_ids"]: list[str] of HA entity_ids used for cost calculation.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from ...time_utils import utc_now_iso
 
 
 _TIME_RE = re.compile(r"^(?P<h>\d{2}):(?P<m>\d{2})$")
+_ENTITY_ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 
 
 def _parse_time_hhmm(value: Any) -> str:
@@ -54,6 +58,26 @@ def _parse_price_pair(obj: Any, field: str) -> dict[str, float]:
     return {"ht": _num(obj.get("ht"), "ht"), "ttc": _num(obj.get("ttc"), "ttc")}
 
 
+def _parse_entity_id_list(value: Any, field: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field}:invalid")
+
+    out: list[str] = []
+    for raw in value:
+        if not isinstance(raw, str):
+            raise ValueError(f"{field}:invalid")
+        eid = raw.strip()
+        if not eid:
+            continue
+        if not _ENTITY_ID_RE.match(eid):
+            raise ValueError(f"{field}:invalid")
+        if eid not in out:
+            out.append(eid)
+    return out
+
+
 class SettingsPricingView(HomeAssistantView):
     """Get/set pricing settings (contract type, HT/TTC prices, subscription, HPHC schedule)."""
 
@@ -71,14 +95,16 @@ class SettingsPricingView(HomeAssistantView):
         settings = cat.get("settings") if isinstance(cat, dict) else None
         pricing = settings.get("pricing") if isinstance(settings, dict) else None
 
+        # Default contract values (user suggested, consistent for fixed and HP/HC).
         defaults = {
             "contract_type": "fixed",
             "display_mode": "ttc",
-            "subscription_monthly": {"ht": 0.0, "ttc": 0.0},
-            "fixed_energy_per_kwh": {"ht": 0.0, "ttc": 0.0},
-            "hp_energy_per_kwh": {"ht": 0.0, "ttc": 0.0},
-            "hc_energy_per_kwh": {"ht": 0.0, "ttc": 0.0},
+            "subscription_monthly": {"ht": 13.79, "ttc": 19.79},
+            "fixed_energy_per_kwh": {"ht": 0.1327, "ttc": 0.1952},
+            "hp_energy_per_kwh": {"ht": 0.1327, "ttc": 0.1952},
+            "hc_energy_per_kwh": {"ht": 0.1327, "ttc": 0.1952},
             "hc_schedule": {"start": "22:00", "end": "06:00"},
+            "cost_entity_ids": [],
         }
 
         return self.json({"ok": True, "pricing": pricing, "defaults": defaults})
@@ -118,11 +144,13 @@ class SettingsPricingView(HomeAssistantView):
                 raise ValueError("display_mode:invalid")
 
             subscription_monthly = _parse_price_pair(pricing_in.get("subscription_monthly"), "subscription_monthly")
+            cost_entity_ids = _parse_entity_id_list(pricing_in.get("cost_entity_ids"), "cost_entity_ids")
 
             out: dict[str, Any] = {
                 "contract_type": contract_type,
                 "display_mode": display_mode,
                 "subscription_monthly": subscription_monthly,
+                "cost_entity_ids": cost_entity_ids,
                 "updated_at": utc_now_iso(),
             }
 

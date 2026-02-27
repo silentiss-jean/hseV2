@@ -10,6 +10,7 @@ Design principles:
 - Store both HT and TTC; never infer VAT.
 - Include monthly subscription (abonnement) HT and TTC.
 - HP/HC schedule is user-configurable; default 22:00 → 06:00.
+- Allow selecting the HA entity_ids that will be used for cost calculation.
 
 Unified API endpoints:
 
@@ -28,6 +29,7 @@ Common fields:
 - contract_type: "fixed" | "hphc"
 - display_mode: "ttc" | "ht"
 - subscription_monthly: { ht: number, ttc: number }
+- cost_entity_ids: string[] (optional)
 
 If contract_type == "fixed":
 
