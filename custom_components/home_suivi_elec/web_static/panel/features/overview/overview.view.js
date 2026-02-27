@@ -1,20 +1,5 @@
 (function () {
-  const { el } = window.hse_dom;
-
-  function _get_hass_from_dom() {
-    // HA UI root
-    const ha = document.querySelector("home-assistant");
-    if (ha?.hass) return ha.hass;
-
-    // sometimes hass sits on nested elements
-    const main = document.querySelector("home-assistant-main");
-    if (main?.hass) return main.hass;
-
-    const root = document.querySelector("home-assistant\u2011main") || document.querySelector("home-assistant-main");
-    if (root?.hass) return root.hass;
-
-    return null;
-  }
+  const { el, clear } = window.hse_dom;
 
   function _current_reference_entity_id(catalogue) {
     const items = catalogue?.items || {};
@@ -40,11 +25,9 @@
     if (v == null) return null;
     const unit = st.attributes?.unit_of_measurement || "";
 
-    // Basic unit conversion
     if (unit === "W" || unit === "w") return v;
     if (unit === "kW" || unit === "kw") return v * 1000.0;
 
-    // If unit missing, assume W when it's a power sensor
     return v;
   }
 
@@ -92,11 +75,8 @@
     return table;
   }
 
-  function render_overview(container, data) {
-    // IMPORTANT: do NOT clear(container) here.
-    // hse_panel.js already created the "Rafraîchir" UI card at the top.
-
-    const hass = _get_hass_from_dom();
+  function render_overview(container, data, hass) {
+    clear(container);
 
     const catalogue = data?.catalogue || null;
     const pricing = data?.pricing || null;
@@ -134,7 +114,6 @@
 
     const delta_w = ref_w == null ? null : ref_w - total_w;
 
-    // ===== Top summary (2 columns)
     const grid = el("div", "hse_grid_2col");
 
     const left = el("div", "hse_card");
@@ -146,13 +125,7 @@
     left.appendChild(_mk_kv("Écart (réf - calcul)", _fmt_w(delta_w), false));
 
     if (!hass) {
-      left.appendChild(
-        el(
-          "div",
-          "hse_subtitle",
-          "Note: hass non accessible depuis le DOM, clique sur Rafraîchir ou recharge la page."
-        )
-      );
+      left.appendChild(el("div", "hse_subtitle", "hass non disponible: valeurs temps réel indisponibles."));
     }
 
     const right = el("div", "hse_card");
@@ -192,7 +165,6 @@
     grid.appendChild(right);
     container.appendChild(grid);
 
-    // ===== Selected sensors table
     const cardSel = el("div", "hse_card");
     cardSel.appendChild(el("div", null, `Capteurs sélectionnés (calcul) (${selected_rows.length})`));
 
@@ -215,7 +187,6 @@
 
     container.appendChild(cardSel);
 
-    // ===== Reference details
     const cardRef = el("div", "hse_card");
     cardRef.appendChild(el("div", null, "Référence (compteur total)"));
 
