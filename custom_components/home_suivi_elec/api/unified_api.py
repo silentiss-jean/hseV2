@@ -9,6 +9,7 @@ from .views.catalogue_item_triage import CatalogueItemTriageView
 from .views.catalogue_reference_total import CatalogueReferenceTotalView
 from .views.catalogue_refresh import CatalogueRefreshView
 from .views.catalogue_triage_bulk import CatalogueTriageBulkView
+from .views.dashboard_overview import DashboardOverviewView
 from .views.enrich_apply import EnrichApplyView
 from .views.enrich_preview import EnrichPreviewView
 from .views.entities_scan import EntitiesScanView
@@ -29,3 +30,4 @@ def async_register_unified_api(hass) -> None:
     hass.http.register_view(SettingsPricingView())
     hass.http.register_view(EnrichPreviewView())
     hass.http.register_view(EnrichApplyView())
+    hass.http.register_view(DashboardOverviewView())

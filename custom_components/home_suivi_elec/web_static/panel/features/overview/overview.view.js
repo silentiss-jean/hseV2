@@ -1,40 +1,21 @@
 (function () {
   const { el, clear } = window.hse_dom;
 
-  function _current_reference_entity_id(catalogue) {
-    const items = catalogue?.items || {};
-    for (const it of Object.values(items)) {
-      if (!it || typeof it !== "object") continue;
-      const enr = it.enrichment || {};
-      if (enr.is_reference_total === true) {
-        const src = it.source || {};
-        return src.entity_id || null;
-      }
-    }
-    return null;
-  }
-
   function _num(x) {
     const v = Number.parseFloat(String(x));
     return Number.isFinite(v) ? v : null;
-  }
-
-  function _power_w_from_state(st) {
-    if (!st) return null;
-    const v = _num(st.state);
-    if (v == null) return null;
-    const unit = st.attributes?.unit_of_measurement || "";
-
-    if (unit === "W" || unit === "w") return v;
-    if (unit === "kW" || unit === "kw") return v * 1000.0;
-
-    return v;
   }
 
   function _fmt_w(w) {
     if (w == null) return "—";
     if (Math.abs(w) >= 1000) return `${(w / 1000).toFixed(2)} kW`;
     return `${Math.round(w)} W`;
+  }
+
+  function _fmt_eur(x) {
+    const v = _num(x);
+    if (v == null) return "—";
+    return `${v.toFixed(2)} €`;
   }
 
   function _mk_kv(label, value, mono) {
@@ -75,85 +56,60 @@
     return table;
   }
 
+  function _mk_top_table(rows) {
+    return _mk_table(rows, [
+      { label: "Nom", value: (r) => r.name || r.entity_id },
+      { label: "Puissance", value: (r) => _fmt_w(r.power_w) },
+      { label: "Entity", value: (r) => el("span", "hse_mono", r.entity_id) },
+    ]);
+  }
+
   function render_overview(container, data, hass) {
     clear(container);
 
-    const catalogue = data?.catalogue || null;
-    const pricing = data?.pricing || null;
-    const defaults = data?.defaults || null;
-    const scan = data?.scan || { candidates: [] };
-
-    const ref_eid = _current_reference_entity_id(catalogue);
-    const cost_ids = Array.isArray(pricing?.cost_entity_ids) ? pricing.cost_entity_ids : [];
-
-    const cand_map = new Map();
-    for (const c of scan?.candidates || []) {
-      if (!c?.entity_id) continue;
-      cand_map.set(c.entity_id, c);
+    const dash = data?.dashboard || null;
+    if (!dash || dash.ok !== true) {
+      const card = el("div", "hse_card");
+      card.appendChild(el("div", null, "Accueil"));
+      card.appendChild(el("div", "hse_subtitle", "Impossible de charger le dashboard."));
+      container.appendChild(card);
+      return;
     }
 
-    const selected_rows = cost_ids.map((eid) => {
-      const c = cand_map.get(eid);
-      const st = hass?.states?.[eid] || null;
-      const w = _power_w_from_state(st);
-
-      return {
-        name: c?.name || eid,
-        entity_id: eid,
-        state: st?.state ?? "—",
-        unit: st?.attributes?.unit_of_measurement ?? "",
-        power_w: w,
-        last_updated: st?.last_updated || st?.last_changed || "",
-      };
-    });
-
-    const total_w = selected_rows.reduce((acc, r) => acc + (r.power_w || 0), 0);
-
-    const ref_st = ref_eid ? hass?.states?.[ref_eid] : null;
-    const ref_w = _power_w_from_state(ref_st);
-
-    const delta_w = ref_w == null ? null : ref_w - total_w;
+    const pricing = dash.pricing || dash.defaults || {};
 
     const grid = el("div", "hse_grid_2col");
 
     const left = el("div", "hse_card");
-    left.appendChild(el("div", null, "Résumé conso (temps réel)"));
+    left.appendChild(el("div", null, "Top consommateurs (live)"));
     left.appendChild(el("div", "hse_subtitle", "Valeurs issues des états Home Assistant."));
 
-    left.appendChild(_mk_kv("Total calculé (capteurs sélectionnés)", _fmt_w(total_w), false));
-    left.appendChild(_mk_kv("Référence (compteur total)", ref_eid ? `${_fmt_w(ref_w)} (${ref_eid})` : "(Aucune)", true));
-    left.appendChild(_mk_kv("Écart (réf - calcul)", _fmt_w(delta_w), false));
+    const b1 = Array.isArray(dash?.top_live?.bucket_100_500) ? dash.top_live.bucket_100_500 : [];
+    const b2 = Array.isArray(dash?.top_live?.bucket_gt_500) ? dash.top_live.bucket_gt_500 : [];
 
-    if (!hass) {
-      left.appendChild(el("div", "hse_subtitle", "hass non disponible: valeurs temps réel indisponibles."));
-    }
+    left.appendChild(el("div", "hse_subtitle", "100 → 500 W"));
+    left.appendChild(b1.length ? _mk_top_table(b1) : el("div", "hse_subtitle", "—"));
+    left.appendChild(el("div", "hse_subtitle", "> 500 W"));
+    left.appendChild(b2.length ? _mk_top_table(b2) : el("div", "hse_subtitle", "—"));
+
+    const total_w = dash?.computed?.total_power_w ?? null;
+    left.appendChild(_mk_kv("Total calculé (capteurs sélectionnés)", _fmt_w(total_w), false));
 
     const right = el("div", "hse_card");
     right.appendChild(el("div", null, "Contrat / Tarifs"));
 
-    const eff = pricing || defaults || {};
-    const ct = eff.contract_type || "fixed";
-    const dm = eff.display_mode || "ttc";
+    const ct = pricing.contract_type || "fixed";
+    const dm = pricing.display_mode || "ttc";
 
     right.appendChild(_mk_kv("Type de contrat", ct === "hphc" ? "HP / HC" : "Prix fixe", false));
-    right.appendChild(_mk_kv("Affichage", dm.toUpperCase(), false));
+    right.appendChild(_mk_kv("Affichage", String(dm).toUpperCase(), false));
 
-    const sub = eff.subscription_monthly || {};
-    right.appendChild(_mk_kv("Abonnement mensuel", `${sub.ht ?? "—"} HT / ${sub.ttc ?? "—"} TTC`, false));
-
-    if (ct === "fixed") {
-      const p = eff.fixed_energy_per_kwh || {};
-      right.appendChild(_mk_kv("Prix énergie (€/kWh)", `${p.ht ?? "—"} HT / ${p.ttc ?? "—"} TTC`, false));
-    } else {
-      const hp = eff.hp_energy_per_kwh || {};
-      const hc = eff.hc_energy_per_kwh || {};
-      const sch = eff.hc_schedule || {};
-      right.appendChild(_mk_kv("Prix HP (€/kWh)", `${hp.ht ?? "—"} HT / ${hp.ttc ?? "—"} TTC`, false));
-      right.appendChild(_mk_kv("Prix HC (€/kWh)", `${hc.ht ?? "—"} HT / ${hc.ttc ?? "—"} TTC`, false));
-      right.appendChild(_mk_kv("Plage HC", `${sch.start ?? "—"} → ${sch.end ?? "—"}`, false));
+    const sub = pricing.subscription_monthly || {};
+    if (sub && (sub.ht != null || sub.ttc != null)) {
+      right.appendChild(_mk_kv("Abonnement mensuel", `${sub.ht ?? "—"} HT / ${sub.ttc ?? "—"} TTC`, false));
     }
 
-    if (pricing?.updated_at) {
+    if (pricing.updated_at) {
       right.appendChild(_mk_kv("Tarifs enregistrés", pricing.updated_at, true));
     }
 
@@ -165,42 +121,83 @@
     grid.appendChild(right);
     container.appendChild(grid);
 
-    const cardSel = el("div", "hse_card");
-    cardSel.appendChild(el("div", null, `Capteurs sélectionnés (calcul) (${selected_rows.length})`));
+    const cardTotals = el("div", "hse_card");
+    cardTotals.appendChild(el("div", null, "Coûts globaux"));
+    const totals = dash.totals || {};
 
-    if (!selected_rows.length) {
-      cardSel.appendChild(el("div", "hse_subtitle", "Aucun capteur sélectionné pour le calcul."));
+    const mk_tot = (label, it) => {
+      if (!it) {
+        cardTotals.appendChild(_mk_kv(label, "—", false));
+        return;
+      }
+      const ttc = it.total_ttc != null ? _fmt_eur(it.total_ttc) : "—";
+      const kwh = it.energy_kwh != null ? `${_num(it.energy_kwh)?.toFixed(3) ?? "—"} kWh` : "—";
+      cardTotals.appendChild(_mk_kv(label, `${ttc} (${kwh})`, false));
+    };
+
+    mk_tot("Semaine", totals.week);
+    mk_tot("Mois", totals.month);
+    mk_tot("Année", totals.year);
+
+    if (Array.isArray(dash.warnings) && dash.warnings.length) {
+      cardTotals.appendChild(_mk_kv("Warnings", dash.warnings.join(", "), true));
+    }
+
+    container.appendChild(cardTotals);
+
+    const cardCum = el("div", "hse_card");
+    cardCum.appendChild(el("div", null, "Capteurs détectés – Puissance cumulée"));
+
+    const rows = Array.isArray(dash.cumulative_table) ? dash.cumulative_table : [];
+    if (!rows.length) {
+      cardCum.appendChild(el("div", "hse_subtitle", "—"));
+    } else {
+      cardCum.appendChild(
+        _mk_table(rows, [
+          { label: "Période", value: (r) => r.period },
+          { label: "kWh", value: (r) => (r.kwh == null ? "—" : `${_num(r.kwh)?.toFixed(3) ?? "—"}`) },
+          { label: "Coût TTC", value: (r) => _fmt_eur(r.total_ttc ?? r.cost_ttc) },
+        ])
+      );
+    }
+
+    container.appendChild(cardCum);
+
+    const cardSel = el("div", "hse_card");
+    const selected = Array.isArray(dash.selected) ? dash.selected : [];
+    cardSel.appendChild(el("div", null, `Capteurs sélectionnés (${selected.length})`));
+
+    if (!selected.length) {
+      cardSel.appendChild(el("div", "hse_subtitle", "Aucun capteur sélectionné."));
     } else {
       cardSel.appendChild(
-        _mk_table(
-          selected_rows,
-          [
-            { label: "Nom", value: (r) => r.name },
-            { label: "Entity", value: (r) => el("span", "hse_mono", r.entity_id) },
-            { label: "Puissance", value: (r) => _fmt_w(r.power_w) },
-            { label: "État", value: (r) => `${r.state} ${r.unit || ""}`.trim() },
-            { label: "Updated", value: (r) => el("span", "hse_mono", r.last_updated || "") },
-          ]
-        )
+        _mk_table(selected, [
+          { label: "Nom", value: (r) => r.name || r.entity_id },
+          { label: "Entity", value: (r) => el("span", "hse_mono", r.entity_id) },
+          { label: "Puissance", value: (r) => _fmt_w(r.power_w) },
+          { label: "État", value: (r) => `${r.state ?? "—"} ${(r.unit || "").trim()}`.trim() },
+          { label: "Updated", value: (r) => el("span", "hse_mono", r.last_updated || "") },
+        ])
       );
     }
 
     container.appendChild(cardSel);
 
-    const cardRef = el("div", "hse_card");
-    cardRef.appendChild(el("div", null, "Référence (compteur total)"));
+    if (dash.reference) {
+      const cardRef = el("div", "hse_card");
+      cardRef.appendChild(el("div", null, "Capteur externe de référence"));
+      cardRef.appendChild(_mk_kv("Entity", dash.reference.entity_id, true));
+      cardRef.appendChild(_mk_kv("Puissance", _fmt_w(dash.reference.power_w), false));
 
-    if (!ref_eid) {
-      cardRef.appendChild(el("div", "hse_subtitle", "Aucune référence configurée."));
-    } else {
-      cardRef.appendChild(_mk_kv("Entity", ref_eid, true));
-      cardRef.appendChild(_mk_kv("Puissance", _fmt_w(ref_w), false));
-      if (ref_st) {
-        cardRef.appendChild(_mk_kv("État brut", `${ref_st.state} ${(ref_st.attributes?.unit_of_measurement || "").trim()}`.trim(), false));
+      if (dash.delta && dash.delta.power_w != null) {
+        const cardDelta = el("div", "hse_card");
+        cardDelta.appendChild(el("div", null, "Delta (réf - calcul)"));
+        cardDelta.appendChild(_mk_kv("Écart", _fmt_w(dash.delta.power_w), false));
+        container.appendChild(cardDelta);
       }
-    }
 
-    container.appendChild(cardRef);
+      container.appendChild(cardRef);
+    }
   }
 
   window.hse_overview_view = { render_overview };
