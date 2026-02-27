@@ -83,10 +83,11 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     refLine.textContent = `Référence actuelle: ${currentRef}`;
     refCard.appendChild(refLine);
 
-    const row = el("div", "hse_row");
+    const row = el("div", "hse_toolbar");
 
     const select = document.createElement("select");
-    select.className = "hse_select";
+    // Use existing tokens so the widget stays consistent across themes.
+    select.className = "hse_input";
 
     const optNone = document.createElement("option");
     optNone.value = "";
@@ -115,7 +116,7 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     }
 
     if (model.error) {
-      const pre = el("pre", null, String(model.error));
+      const pre = el("pre", "hse_code", String(model.error));
       refCard.appendChild(pre);
     }
 
