@@ -1,5 +1,4 @@
-"""
-HSE_DOC: custom_components/home_suivi_elec/docs/unified_api.md
+"""HSE_DOC: custom_components/home_suivi_elec/docs/unified_api.md
 HSE_MAINTENANCE: If you add/remove/rename views here, update the doc above.
 """
 
@@ -15,6 +14,7 @@ from .views.enrich_preview import EnrichPreviewView
 from .views.entities_scan import EntitiesScanView
 from .views.frontend_manifest import FrontendManifestView
 from .views.ping import PingView
+from .views.settings_pricing import SettingsPricingView
 
 
 def async_register_unified_api(hass) -> None:
@@ -26,5 +26,6 @@ def async_register_unified_api(hass) -> None:
     hass.http.register_view(CatalogueItemTriageView())
     hass.http.register_view(CatalogueTriageBulkView())
     hass.http.register_view(CatalogueReferenceTotalView())
+    hass.http.register_view(SettingsPricingView())
     hass.http.register_view(EnrichPreviewView())
     hass.http.register_view(EnrichApplyView())
