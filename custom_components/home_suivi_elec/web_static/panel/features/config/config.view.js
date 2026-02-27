@@ -126,36 +126,33 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
   function render_config(container, model, on_action) {
     clear(container);
 
-    const card = el("div", "hse_card");
+    const headerCard = el("div", "hse_card");
     const header = el("div", null);
     header.appendChild(el("div", null, "Configuration"));
     header.appendChild(
       el(
         "div",
         "hse_subtitle",
-        "1) Renseigne Contrat/Tarifs + capteurs de calcul. 2) Sélectionne ensuite le capteur de référence (compteur total) et sauvegarde."
+        "Ordre recommandé : 1) Contrat/Tarifs. 2) Capteur de référence (compteur total). 3) Capteurs utilisés pour le calcul."
       )
     );
+    headerCard.appendChild(header);
 
-    const toolbar = el("div", "hse_toolbar");
+    // Shared data
+    const savedPricing = model.pricing || null;
+    const draft = model.pricing_draft || model.pricing || model.pricing_defaults || {};
+    const candidates = _power_candidates(model.scan_result);
 
-    const btnRefresh = el("button", "hse_button", model.loading ? "Chargement…" : "Rafraîchir");
-    btnRefresh.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
-    btnRefresh.addEventListener("click", () => on_action("refresh"));
+    const effectiveRef = model.selected_reference_entity_id || model.current_reference_entity_id || null;
 
-    const btnSave = el("button", "hse_button hse_button_primary", model.saving ? "Sauvegarde…" : "Sauvegarder");
-    btnSave.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
-    btnSave.addEventListener("click", () => on_action("save_reference"));
+    const selectedIdsRaw = Array.isArray(_get(draft, "cost_entity_ids", [])) ? _get(draft, "cost_entity_ids", []) : [];
+    const selectedIds = effectiveRef ? selectedIdsRaw.filter((x) => x !== effectiveRef) : selectedIdsRaw.slice();
+    const selectedSet = new Set(selectedIds);
+    const hadRefConflict = !!(effectiveRef && selectedIdsRaw.includes(effectiveRef));
 
-    const btnClear = el("button", "hse_button", "Supprimer la référence");
-    btnClear.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
-    btnClear.addEventListener("click", () => on_action("clear_reference"));
+    const candidatesForCost = effectiveRef ? candidates.filter((c) => c.entity_id !== effectiveRef) : candidates;
 
-    toolbar.appendChild(btnRefresh);
-    toolbar.appendChild(btnSave);
-    toolbar.appendChild(btnClear);
-
-    // Pricing FIRST
+    // 1) Pricing panel
     const pricingCard = el("div", "hse_card");
     pricingCard.appendChild(el("div", null, "Contrat / Tarifs"));
     pricingCard.appendChild(
@@ -166,9 +163,6 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       )
     );
 
-    const savedPricing = model.pricing || null;
-    const draft = model.pricing_draft || model.pricing || model.pricing_defaults || {};
-
     const savedLine = el("div", "hse_subtitle");
     if (savedPricing?.updated_at) {
       savedLine.textContent = `Tarifs enregistrés (updated_at): ${savedPricing.updated_at}`;
@@ -176,20 +170,6 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       savedLine.textContent = "Tarifs enregistrés: (aucun)";
     }
     pricingCard.appendChild(savedLine);
-
-    const pricingToolbar = el("div", "hse_toolbar");
-
-    const btnPricingSave = el("button", "hse_button hse_button_primary", model.pricing_saving ? "Sauvegarde…" : "Sauvegarder tarifs");
-    btnPricingSave.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
-    btnPricingSave.addEventListener("click", () => on_action("pricing_save"));
-
-    const btnPricingClear = el("button", "hse_button", "Effacer tarifs");
-    btnPricingClear.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
-    btnPricingClear.addEventListener("click", () => on_action("pricing_clear"));
-
-    pricingToolbar.appendChild(btnPricingSave);
-    pricingToolbar.appendChild(btnPricingClear);
-    pricingCard.appendChild(pricingToolbar);
 
     const contractType = _get(draft, "contract_type", "fixed");
     const displayMode = _get(draft, "display_mode", "ttc");
@@ -296,57 +276,24 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       pricingCard.appendChild(rowSched);
     }
 
-    // Entity selection for cost calculation
-    const candidates = _power_candidates(model.scan_result);
-    const selectedIds = Array.isArray(_get(draft, "cost_entity_ids", [])) ? _get(draft, "cost_entity_ids", []) : [];
-    const selectedSet = new Set(selectedIds);
+    // Pricing buttons at the end (as requested)
+    const pricingToolbar = el("div", "hse_toolbar");
 
-    const section = el("div", "hse_section_title", "Capteurs utilisés pour le calcul" );
-    pricingCard.appendChild(section);
-
-    const grid = el("div", null);
-    grid.style.display = "grid";
-    grid.style.gridTemplateColumns = "1fr 1fr";
-    grid.style.gap = "var(--hse_gap)";
-
-    const left = el("div", "hse_card");
-    left.appendChild(el("div", null, `Disponibles (${candidates.filter((c)=>!selectedSet.has(c.entity_id)).length})`));
-
-    const avail = candidates.filter((c) => !selectedSet.has(c.entity_id));
-    left.appendChild(
-      _mk_table(avail, [
-        { label: "Nom", value: (c) => c.name || "" },
-        { label: "Entity", value: (c) => el("span", "hse_mono", c.entity_id || "") },
-        {
-          label: "",
-          value: (c) =>
-            _mk_button("Ajouter", () => on_action("pricing_list_add", { entity_id: c.entity_id })),
-        },
-      ])
+    const btnPricingSave = el(
+      "button",
+      "hse_button hse_button_primary",
+      model.pricing_saving ? "Sauvegarde…" : "Sauvegarder tarifs (incl. capteurs)"
     );
+    btnPricingSave.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
+    btnPricingSave.addEventListener("click", () => on_action("pricing_save"));
 
-    const right = el("div", "hse_card");
-    right.appendChild(el("div", null, `Sélectionnés (${selectedIds.length})`));
+    const btnPricingClear = el("button", "hse_button", "Effacer tarifs");
+    btnPricingClear.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
+    btnPricingClear.addEventListener("click", () => on_action("pricing_clear"));
 
-    const selectedRows = candidates
-      .filter((c) => selectedSet.has(c.entity_id))
-      .sort((a, b) => String(a.name || a.entity_id || "").localeCompare(String(b.name || b.entity_id || "")));
-
-    right.appendChild(
-      _mk_table(selectedRows, [
-        { label: "Nom", value: (c) => c.name || "" },
-        { label: "Entity", value: (c) => el("span", "hse_mono", c.entity_id || "") },
-        {
-          label: "",
-          value: (c) =>
-            _mk_button("Retirer", () => on_action("pricing_list_remove", { entity_id: c.entity_id })),
-        },
-      ])
-    );
-
-    grid.appendChild(left);
-    grid.appendChild(right);
-    pricingCard.appendChild(grid);
+    pricingToolbar.appendChild(btnPricingSave);
+    pricingToolbar.appendChild(btnPricingClear);
+    pricingCard.appendChild(pricingToolbar);
 
     if (model.pricing_message) {
       pricingCard.appendChild(el("div", "hse_subtitle", model.pricing_message));
@@ -356,57 +303,148 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       pricingCard.appendChild(el("pre", "hse_code", String(model.pricing_error)));
     }
 
-    // Reference card AFTER pricing
+    // 2) Reference panel (independent)
     const refCard = el("div", "hse_card");
     refCard.appendChild(el("div", null, "Capteur de référence (compteur total)"));
+    refCard.appendChild(
+      el(
+        "div",
+        "hse_subtitle",
+        "Le capteur de référence est indépendant: il sert de vérité terrain des coûts (comparaison), et ne peut pas être inclus dans les capteurs de calcul."
+      )
+    );
+
+    const refToolbar = el("div", "hse_toolbar");
+
+    const btnRefresh = el("button", "hse_button", model.loading ? "Chargement…" : "Rafraîchir");
+    btnRefresh.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
+    btnRefresh.addEventListener("click", () => on_action("refresh"));
+
+    const btnSave = el("button", "hse_button hse_button_primary", model.saving ? "Sauvegarde…" : "Sauvegarder");
+    btnSave.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
+    btnSave.addEventListener("click", () => on_action("save_reference"));
+
+    const btnClear = el("button", "hse_button", "Supprimer la référence");
+    btnClear.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
+    btnClear.addEventListener("click", () => on_action("clear_reference"));
+
+    refToolbar.appendChild(btnRefresh);
+    refToolbar.appendChild(btnSave);
+    refToolbar.appendChild(btnClear);
+    refCard.appendChild(refToolbar);
 
     const refLine = el("div", "hse_subtitle");
     const currentRef = model.current_reference_entity_id || "(Aucune référence sélectionnée)";
     refLine.textContent = `Référence actuelle: ${currentRef}`;
     refCard.appendChild(refLine);
 
-    const row = el("div", "hse_toolbar");
+    const rowRef = el("div", "hse_toolbar");
 
-    const select = document.createElement("select");
-    // Use existing tokens so the widget stays consistent across themes.
-    select.className = "hse_input";
+    const selectRef = document.createElement("select");
+    selectRef.className = "hse_input";
 
     const optNone = document.createElement("option");
     optNone.value = "";
     optNone.textContent = "(Aucune)";
-    select.appendChild(optNone);
+    selectRef.appendChild(optNone);
 
     for (const c of candidates) {
       const opt = document.createElement("option");
       opt.value = c.entity_id;
       const label = `${c.name || c.entity_id} (${c.entity_id})`;
       opt.textContent = label;
-      select.appendChild(opt);
+      selectRef.appendChild(opt);
     }
 
-    const selected = model.selected_reference_entity_id || "";
-    select.value = selected;
+    const selectedRef = model.selected_reference_entity_id || "";
+    selectRef.value = selectedRef;
+    selectRef.addEventListener("change", () => on_action("select_reference", selectRef.value || null));
 
-    select.addEventListener("change", () => on_action("select_reference", select.value || null));
-
-    row.appendChild(select);
-    refCard.appendChild(row);
+    rowRef.appendChild(selectRef);
+    refCard.appendChild(rowRef);
 
     if (model.message) {
       refCard.appendChild(el("div", "hse_subtitle", model.message));
     }
 
     if (model.error) {
-      const pre = el("pre", "hse_code", String(model.error));
-      refCard.appendChild(pre);
+      refCard.appendChild(el("pre", "hse_code", String(model.error)));
     }
 
-    card.appendChild(header);
-    card.appendChild(toolbar);
+    // 3) Cost entities panel
+    const costCard = el("div", "hse_card");
+    costCard.appendChild(el("div", null, "Capteurs utilisés pour le calcul"));
+    costCard.appendChild(
+      el(
+        "div",
+        "hse_subtitle",
+        "Sélectionne les capteurs dont la consommation sera agrégée pour estimer les coûts."
+      )
+    );
 
-    container.appendChild(card);
+    if (effectiveRef) {
+      costCard.appendChild(el("div", "hse_subtitle", `Capteur de référence exclu: ${effectiveRef}`));
+    }
+
+    if (hadRefConflict) {
+      const badges = el("div", "hse_badges");
+      badges.appendChild(el("span", "hse_badge hse_badge_warn", "Garde-fou: la référence est exclue des calculs"));
+      costCard.appendChild(badges);
+    }
+
+    const grid = el("div", "hse_grid_2col");
+
+    const left = el("div", "hse_card hse_card_inner");
+    const avail = candidatesForCost.filter((c) => !selectedSet.has(c.entity_id));
+    left.appendChild(el("div", null, `Disponibles (${avail.length})`));
+    left.appendChild(
+      _mk_table(avail, [
+        { label: "Nom", value: (c) => c.name || "" },
+        { label: "Entity", value: (c) => el("span", "hse_mono", c.entity_id || "") },
+        {
+          label: "",
+          value: (c) => _mk_button("Ajouter", () => on_action("pricing_list_add", { entity_id: c.entity_id })),
+        },
+      ])
+    );
+
+    const right = el("div", "hse_card hse_card_inner");
+    const selectedRows = candidatesForCost
+      .filter((c) => selectedSet.has(c.entity_id))
+      .sort((a, b) => String(a.name || a.entity_id || "").localeCompare(String(b.name || b.entity_id || "")));
+
+    right.appendChild(el("div", null, `Sélectionnés (${selectedIds.length})`));
+    right.appendChild(
+      _mk_table(selectedRows, [
+        { label: "Nom", value: (c) => c.name || "" },
+        { label: "Entity", value: (c) => el("span", "hse_mono", c.entity_id || "") },
+        {
+          label: "",
+          value: (c) => _mk_button("Retirer", () => on_action("pricing_list_remove", { entity_id: c.entity_id })),
+        },
+      ])
+    );
+
+    grid.appendChild(left);
+    grid.appendChild(right);
+    costCard.appendChild(grid);
+
+    // Optional shortcut: save pricing+capteurs from this panel too
+    const costToolbar = el("div", "hse_toolbar");
+    const btnSave2 = el(
+      "button",
+      "hse_button hse_button_primary",
+      model.pricing_saving ? "Sauvegarde…" : "Sauvegarder (tarifs + capteurs)"
+    );
+    btnSave2.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
+    btnSave2.addEventListener("click", () => on_action("pricing_save"));
+    costToolbar.appendChild(btnSave2);
+    costCard.appendChild(costToolbar);
+
+    container.appendChild(headerCard);
     container.appendChild(pricingCard);
     container.appendChild(refCard);
+    container.appendChild(costCard);
   }
 
   window.hse_config_view = { render_config, _current_reference_entity_id };

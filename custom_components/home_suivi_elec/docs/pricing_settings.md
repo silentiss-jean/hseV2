@@ -11,6 +11,7 @@ Design principles:
 - Include monthly subscription (abonnement) HT and TTC.
 - HP/HC schedule is user-configurable; default 22:00 → 06:00.
 - Allow selecting the HA entity_ids that will be used for cost calculation.
+- Guardrail: the reference total entity cannot be part of cost_entity_ids.
 
 Unified API endpoints:
 

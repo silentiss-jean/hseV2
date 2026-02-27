@@ -71,6 +71,8 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
 .hse_tab[data-active="true"] { border-color: var(--hse_accent); }
 
 .hse_card { background:var(--hse_card_bg); border:1px solid var(--hse_border); border-radius:var(--hse_radius); padding:12px; margin:12px 0; }
+.hse_card_inner { margin: 0; }
+
 .hse_toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 8px 0; }
 .hse_button { border:1px solid var(--hse_border); background:transparent; color:inherit; border-radius:10px; padding:8px 10px; cursor:pointer; font-size:13px; }
 .hse_button_primary { border-color: var(--hse_accent); }
@@ -118,6 +120,11 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
 .hse_summary { margin: 8px 0 12px 0; }
 
 .hse_groups { margin-top: 8px; display: grid; gap: 10px; }
+
+.hse_grid_2col { display:grid; grid-template-columns: 1fr 1fr; gap: var(--hse_gap); }
+@media (max-width: 900px) {
+  .hse_grid_2col { grid-template-columns: 1fr; }
+}
 
 .hse_fold {
   border: 1px solid var(--hse_border);

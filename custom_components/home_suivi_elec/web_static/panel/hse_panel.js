@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
+const build_signature = "2026-02-27_1618_config_panels_and_reference_guard";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.10";
+  const ASSET_V = "0.1.11";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -346,12 +346,42 @@ const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
         return;
       }
 
+      const _effective_ref = () => this._config_state.selected_reference_entity_id || this._config_state.current_reference_entity_id || null;
+
+      const _ensure_pricing_draft = () => {
+        if (!this._config_state.pricing_draft) {
+          this._config_state.pricing_draft = JSON.parse(
+            JSON.stringify(this._config_state.pricing || this._config_state.pricing_defaults || {})
+          );
+        }
+      };
+
+      const _cost_ids = () => {
+        _ensure_pricing_draft();
+        const arr = this._config_state.pricing_draft?.cost_entity_ids;
+        return Array.isArray(arr) ? arr : [];
+      };
+
+      const _remove_ref_from_cost = () => {
+        const ref = _effective_ref();
+        if (!ref) return false;
+        const ids = _cost_ids();
+        if (!ids.includes(ref)) return false;
+        this._config_state.pricing_draft.cost_entity_ids = ids.filter((x) => x !== ref);
+        return true;
+      };
+
       const _update_from_catalogue = (cat) => {
         this._config_state.catalogue = cat;
         const cur = window.hse_config_view._current_reference_entity_id(cat);
         this._config_state.current_reference_entity_id = cur;
         if (this._config_state.selected_reference_entity_id == null) {
           this._config_state.selected_reference_entity_id = cur;
+        }
+
+        // Guardrail: reference cannot be part of cost sensors
+        if (_remove_ref_from_cost()) {
+          this._config_state.pricing_message = "Garde-fou: le capteur de référence a été retiré des capteurs de calcul.";
         }
       };
 
@@ -362,6 +392,11 @@ const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
         this._config_state.pricing_defaults = defs;
         if (this._config_state.pricing_draft == null) {
           this._config_state.pricing_draft = JSON.parse(JSON.stringify(pr || defs || {}));
+        }
+
+        // Guardrail: reference cannot be part of cost sensors
+        if (_remove_ref_from_cost()) {
+          this._config_state.pricing_message = "Garde-fou: le capteur de référence a été retiré des capteurs de calcul.";
         }
       };
 
@@ -407,20 +442,6 @@ const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
           cur[parts[parts.length - 1]] = v;
         };
 
-        const _ensure_pricing_draft = () => {
-          if (!this._config_state.pricing_draft) {
-            this._config_state.pricing_draft = JSON.parse(
-              JSON.stringify(this._config_state.pricing || this._config_state.pricing_defaults || {})
-            );
-          }
-        };
-
-        const _cost_ids = () => {
-          _ensure_pricing_draft();
-          const arr = this._config_state.pricing_draft?.cost_entity_ids;
-          return Array.isArray(arr) ? arr : [];
-        };
-
         if (action === "select_reference") {
           // IMPORTANT: do not re-render on each selection change.
           // Rendering clears the container, which recreates the <select> and closes it.
@@ -447,6 +468,15 @@ const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
         if (action === "pricing_list_add") {
           const eid = value?.entity_id;
           if (!eid) return;
+
+          const ref = _effective_ref();
+          if (ref && eid === ref) {
+            this._config_state.pricing_message = "Impossible: le capteur de référence ne peut pas être inclus dans les capteurs de calcul.";
+            this._config_state.pricing_error = null;
+            this._render();
+            return;
+          }
+
           const ids = _cost_ids();
           if (!ids.includes(eid)) ids.push(eid);
           this._config_state.pricing_draft.cost_entity_ids = ids;
@@ -499,7 +529,12 @@ const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
             return;
           }
 
-          const ok = window.confirm("Sauvegarder ces tarifs ?");
+          // Guardrail before saving
+          if (_remove_ref_from_cost()) {
+            this._config_state.pricing_message = "Garde-fou: le capteur de référence a été retiré des capteurs de calcul.";
+          }
+
+          const ok = window.confirm("Sauvegarder ces tarifs (et la sélection de capteurs) ?");
           if (!ok) return;
 
           this._config_state.pricing_saving = true;
@@ -508,7 +543,7 @@ const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
           this._render();
 
           try {
-            await window.hse_config_api.set_pricing(this._hass, draft);
+            await window.hse_config_api.set_pricing(this._hass, this._config_state.pricing_draft);
             const pricingResp = await window.hse_config_api.fetch_pricing(this._hass);
             this._config_state.pricing_draft = null;
             _update_from_pricing(pricingResp);
@@ -583,6 +618,14 @@ const build_signature = "2026-02-27_1555_pricing_defaults_and_selectors";
             this._config_state.message = "Aucune référence sélectionnée (rien à sauvegarder).";
             this._render();
             return;
+          }
+
+          // Guardrail: if this entity is in cost sensors, remove it.
+          _ensure_pricing_draft();
+          const ids = _cost_ids();
+          if (ids.includes(entity_id)) {
+            this._config_state.pricing_draft.cost_entity_ids = ids.filter((x) => x !== entity_id);
+            this._config_state.pricing_message = "Garde-fou: la référence a été retirée des capteurs de calcul.";
           }
 
           const ok = window.confirm(`Définir la référence compteur sur ${entity_id} ?\n(Elle sera exclue des totaux mesurés)`);

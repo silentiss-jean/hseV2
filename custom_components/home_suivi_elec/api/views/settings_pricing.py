@@ -10,6 +10,9 @@ We explicitly store both HT and TTC values; we never infer VAT.
 
 Extensions:
 - pricing["cost_entity_ids"]: list[str] of HA entity_ids used for cost calculation.
+
+Guardrails:
+- The reference total entity (catalogue enrichment is_reference_total) cannot be part of cost_entity_ids.
 """
 
 from __future__ import annotations
@@ -76,6 +79,27 @@ def _parse_entity_id_list(value: Any, field: str) -> list[str]:
         if eid not in out:
             out.append(eid)
     return out
+
+
+def _current_reference_entity_id(cat: Any) -> str | None:
+    if not isinstance(cat, dict):
+        return None
+    items = cat.get("items")
+    if not isinstance(items, dict):
+        return None
+    for it in items.values():
+        if not isinstance(it, dict):
+            continue
+        enr = it.get("enrichment")
+        if not isinstance(enr, dict):
+            continue
+        if enr.get("is_reference_total") is True:
+            src = it.get("source")
+            if isinstance(src, dict):
+                eid = src.get("entity_id")
+                if isinstance(eid, str) and eid:
+                    return eid
+    return None
 
 
 class SettingsPricingView(HomeAssistantView):
@@ -145,6 +169,10 @@ class SettingsPricingView(HomeAssistantView):
 
             subscription_monthly = _parse_price_pair(pricing_in.get("subscription_monthly"), "subscription_monthly")
             cost_entity_ids = _parse_entity_id_list(pricing_in.get("cost_entity_ids"), "cost_entity_ids")
+
+            ref_eid = _current_reference_entity_id(cat)
+            if ref_eid and ref_eid in cost_entity_ids:
+                raise ValueError("cost_entity_ids:contains_reference_total")
 
             out: dict[str, Any] = {
                 "contract_type": contract_type,
