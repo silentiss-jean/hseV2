@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-26_1735_config_renderfix";
+const build_signature = "2026-02-27_1400_pricing_ui";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.8";
+  const ASSET_V = "0.1.9";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -62,10 +62,16 @@ const build_signature = "2026-02-26_1735_config_renderfix";
         saving: false,
         error: null,
         message: null,
+        pricing_saving: false,
+        pricing_error: null,
+        pricing_message: null,
         scan_result: { integrations: [], candidates: [] },
         catalogue: null,
         current_reference_entity_id: null,
         selected_reference_entity_id: null,
+        pricing: null,
+        pricing_defaults: null,
+        pricing_draft: null,
       };
 
       this._boot_done = false;
@@ -349,10 +355,22 @@ const build_signature = "2026-02-26_1735_config_renderfix";
         }
       };
 
+      const _update_from_pricing = (resp) => {
+        const pr = resp?.pricing || null;
+        const defs = resp?.defaults || null;
+        this._config_state.pricing = pr;
+        this._config_state.pricing_defaults = defs;
+        if (this._config_state.pricing_draft == null) {
+          this._config_state.pricing_draft = JSON.parse(JSON.stringify(pr || defs || {}));
+        }
+      };
+
       if (!this._config_state.catalogue && !this._config_state.loading) {
         this._config_state.loading = true;
         this._config_state.error = null;
         this._config_state.message = null;
+        this._config_state.pricing_error = null;
+        this._config_state.pricing_message = null;
         this._render();
 
         try {
@@ -363,6 +381,9 @@ const build_signature = "2026-02-26_1735_config_renderfix";
 
           const cat = await window.hse_config_api.fetch_catalogue(this._hass);
           _update_from_catalogue(cat);
+
+          const pricingResp = await window.hse_config_api.fetch_pricing(this._hass);
+          _update_from_pricing(pricingResp);
         } catch (err) {
           this._config_state.error = this._err_msg(err);
         } finally {
@@ -373,6 +394,19 @@ const build_signature = "2026-02-26_1735_config_renderfix";
       }
 
       window.hse_config_view.render_config(container, this._config_state, async (action, value) => {
+        const _deep_set = (obj, path, v) => {
+          if (!obj || typeof obj !== "object") return;
+          const parts = String(path || "").split(".").filter(Boolean);
+          if (!parts.length) return;
+          let cur = obj;
+          for (let i = 0; i < parts.length - 1; i++) {
+            const k = parts[i];
+            if (!cur[k] || typeof cur[k] !== "object") cur[k] = {};
+            cur = cur[k];
+          }
+          cur[parts[parts.length - 1]] = v;
+        };
+
         if (action === "select_reference") {
           // IMPORTANT: do not re-render on each selection change.
           // Rendering clears the container, which recreates the <select> and closes it.
@@ -381,10 +415,84 @@ const build_signature = "2026-02-26_1735_config_renderfix";
           return;
         }
 
+        if (action === "pricing_patch") {
+          const path = value?.path;
+          const v = value?.value;
+          const no_render = value?.no_render === true;
+
+          if (!this._config_state.pricing_draft) {
+            this._config_state.pricing_draft = JSON.parse(JSON.stringify(this._config_state.pricing || this._config_state.pricing_defaults || {}));
+          }
+
+          _deep_set(this._config_state.pricing_draft, path, v);
+          this._config_state.pricing_message = null;
+          this._config_state.pricing_error = null;
+
+          if (!no_render) this._render();
+          return;
+        }
+
+        if (action === "pricing_clear") {
+          const ok = window.confirm("Effacer les tarifs enregistrés ?");
+          if (!ok) return;
+
+          this._config_state.pricing_saving = true;
+          this._config_state.pricing_error = null;
+          this._config_state.pricing_message = null;
+          this._render();
+
+          try {
+            await window.hse_config_api.clear_pricing(this._hass);
+            const pricingResp = await window.hse_config_api.fetch_pricing(this._hass);
+            this._config_state.pricing_draft = null;
+            _update_from_pricing(pricingResp);
+            this._config_state.pricing_message = "Tarifs effacés.";
+          } catch (err) {
+            this._config_state.pricing_error = this._err_msg(err);
+          } finally {
+            this._config_state.pricing_saving = false;
+            this._render();
+          }
+          return;
+        }
+
+        if (action === "pricing_save") {
+          const draft = this._config_state.pricing_draft;
+          if (!draft) {
+            this._config_state.pricing_message = "Aucun tarif à sauvegarder.";
+            this._render();
+            return;
+          }
+
+          const ok = window.confirm("Sauvegarder ces tarifs ?");
+          if (!ok) return;
+
+          this._config_state.pricing_saving = true;
+          this._config_state.pricing_error = null;
+          this._config_state.pricing_message = null;
+          this._render();
+
+          try {
+            await window.hse_config_api.set_pricing(this._hass, draft);
+            const pricingResp = await window.hse_config_api.fetch_pricing(this._hass);
+            this._config_state.pricing_draft = null;
+            _update_from_pricing(pricingResp);
+            this._config_state.pricing_message = "Tarifs sauvegardés.";
+          } catch (err) {
+            this._config_state.pricing_error = this._err_msg(err);
+          } finally {
+            this._config_state.pricing_saving = false;
+            this._render();
+          }
+          return;
+        }
+
         if (action === "refresh") {
           this._config_state.loading = true;
           this._config_state.error = null;
           this._config_state.message = null;
+          this._config_state.pricing_error = null;
+          this._config_state.pricing_message = null;
           this._render();
 
           try {
@@ -398,6 +506,9 @@ const build_signature = "2026-02-26_1735_config_renderfix";
 
             const cat = await window.hse_config_api.fetch_catalogue(this._hass);
             _update_from_catalogue(cat);
+
+            const pricingResp = await window.hse_config_api.fetch_pricing(this._hass);
+            _update_from_pricing(pricingResp);
           } catch (err) {
             this._config_state.error = this._err_msg(err);
           } finally {
@@ -470,6 +581,8 @@ const build_signature = "2026-02-26_1735_config_renderfix";
       });
     }
 
+    // (rest of file unchanged)
+
     async _render_enrich() {
       const container = this._ui.content;
 
@@ -516,6 +629,7 @@ const build_signature = "2026-02-26_1735_config_renderfix";
     // (rest of file unchanged)
 
     async _render_diagnostic() {
+      // unchanged
       const { el } = window.hse_dom;
       const container = this._ui.content;
 
@@ -686,6 +800,7 @@ const build_signature = "2026-02-26_1735_config_renderfix";
     }
 
     _render_custom() {
+      // unchanged
       const container = this._ui.content;
 
       if (!window.hse_custom_view?.render_customisation) {
@@ -718,6 +833,7 @@ const build_signature = "2026-02-26_1735_config_renderfix";
     }
 
     async _render_overview() {
+      // unchanged
       const { el } = window.hse_dom;
       const container = this._ui.content;
 
@@ -751,6 +867,7 @@ const build_signature = "2026-02-26_1735_config_renderfix";
     }
 
     _render_scan() {
+      // unchanged
       const container = this._ui.content;
 
       window.hse_scan_view.render_scan(container, this._scan_result, this._scan_state, async (action, value) => {
