@@ -10,7 +10,7 @@ HSE_MAINTENANCE: If you add/remove theme keys or required variables, update the 
    - Fournit toutes les variables attendues par les features et composants
 
    Notes:
-   - Le manifest (customisation) utilise des keys: light/dark/ocean/forest/sunset/minimal/neon/aurora
+   - Le manifest (customisation) utilise des keys: light/dark/ocean/forest/sunset/minimal/neon/aurora/neuro + ha
    - Ce fichier fournit donc exactement ces sélecteurs.
    ════════════════════════════════════════════════════════════════════════════ */
 
@@ -39,6 +39,79 @@ HSE_MAINTENANCE: If you add/remove theme keys or required variables, update the 
   --hse-badge-radius: 999px;
   --hse-badge-padding: 2px 8px;
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   HOME ASSISTANT (follow HA theme)
+   ──────────────────────────────────────────────────────────────────────────── */
+
+:host([data-theme="ha"]) {
+  /* Let HA decide light/dark; we don't set color-scheme on purpose */
+
+  --hse-bg: var(--primary-background-color);
+  --hse-bg-secondary: var(--secondary-background-color, var(--primary-background-color));
+  --hse-surface: var(--card-background-color);
+  --hse-surface-muted: color-mix(in srgb, var(--card-background-color) 92%, var(--primary-background-color) 8%);
+
+  --hse-border: var(--divider-color);
+  --hse-border-soft: color-mix(in srgb, var(--divider-color) 65%, transparent);
+  --hse-border-strong: color-mix(in srgb, var(--divider-color) 92%, var(--primary-text-color) 8%);
+
+  --hse-text: var(--primary-text-color);
+  --hse-text-main: var(--primary-text-color);
+  --hse-text-muted: var(--secondary-text-color);
+  --hse-text-soft: color-mix(in srgb, var(--secondary-text-color) 85%, transparent);
+  --hse-text-inverse: var(--text-primary-color, var(--primary-background-color));
+
+  --hse-primary: var(--primary-color);
+  --hse-primary-dark: var(--primary-color);
+
+  --hse-accent: var(--accent-color, var(--primary-color));
+  --hse-accent-hover: var(--accent-color, var(--primary-color));
+  --hse-accent-soft: color-mix(in srgb, var(--accent-color, var(--primary-color)) 16%, transparent);
+
+  --hse-info: var(--info-color, var(--primary-color));
+  --hse-success: var(--success-color, #16a34a);
+  --hse-warning: var(--warning-color, #f59e0b);
+  --hse-error: var(--error-color, #ef4444);
+
+  --hse-success-soft: color-mix(in srgb, var(--hse-success) 16%, transparent);
+  --hse-warning-soft: color-mix(in srgb, var(--hse-warning) 16%, transparent);
+  --hse-error-soft: color-mix(in srgb, var(--hse-error) 16%, transparent);
+  --hse-info-soft: color-mix(in srgb, var(--hse-info) 16%, transparent);
+
+  --hse-hover: color-mix(in srgb, var(--hse-primary) 12%, transparent);
+
+  --hse-gradient-primary: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--hse-primary) 92%, transparent),
+    color-mix(in srgb, var(--hse-accent) 88%, transparent)
+  );
+
+  --hse-gradient-header: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--hse-primary) 86%, transparent),
+    color-mix(in srgb, var(--hse-accent) 82%, transparent)
+  );
+
+  --hse-gradient-info: linear-gradient(135deg, color-mix(in srgb, var(--hse-info) 18%, transparent), color-mix(in srgb, var(--hse-info) 8%, transparent));
+  --hse-gradient-warning: linear-gradient(135deg, color-mix(in srgb, var(--hse-warning) 18%, transparent), color-mix(in srgb, var(--hse-warning) 8%, transparent));
+  --hse-gradient-success: linear-gradient(135deg, color-mix(in srgb, var(--hse-success) 18%, transparent), color-mix(in srgb, var(--hse-success) 8%, transparent));
+  --hse-gradient-danger: linear-gradient(135deg, color-mix(in srgb, var(--hse-error) 18%, transparent), color-mix(in srgb, var(--hse-error) 8%, transparent));
+
+  --hse-on-accent: var(--text-primary-color, var(--primary-background-color));
+  --hse-on-header: var(--text-primary-color, var(--primary-background-color));
+
+  --hse-badge-bg: color-mix(in srgb, var(--card-background-color) 90%, var(--primary-background-color) 10%);
+  --hse-badge-border: color-mix(in srgb, var(--divider-color) 80%, transparent);
+  --hse-badge-fg: var(--primary-text-color);
+
+  --hse-bg-dynamic:
+    radial-gradient(900px 700px at 10% 10%, color-mix(in srgb, var(--hse-primary) 20%, transparent), transparent 60%),
+    radial-gradient(900px 700px at 90% 20%, color-mix(in srgb, var(--hse-accent) 18%, transparent), transparent 60%),
+    radial-gradient(900px 700px at 50% 95%, color-mix(in srgb, var(--hse-info) 16%, transparent), transparent 60%);
+}
+
+/* existing themes below (light/dark/ocean/...) */
 
 /* ────────────────────────────────────────────────────────────────────────────
    LIGHT
@@ -104,75 +177,3 @@ HSE_MAINTENANCE: If you add/remove theme keys or required variables, update the 
     radial-gradient(900px 700px at 90% 20%, rgba(124,58,237,0.16), transparent 60%),
     radial-gradient(900px 700px at 50% 95%, rgba(2,132,199,0.14), transparent 60%);
 }
-
-/* ────────────────────────────────────────────────────────────────────────────
-   DARK
-   ──────────────────────────────────────────────────────────────────────────── */
-
-:host([data-theme="dark"]) {
-  color-scheme: dark;
-
-  --hse-bg: #0b1020;
-  --hse-bg-secondary: #0f172a;
-  --hse-surface: rgba(18,24,40,0.72);
-  --hse-surface-muted: rgba(17,24,39,0.62);
-
-  --hse-border: rgba(148,163,184,0.18);
-  --hse-border-soft: rgba(148,163,184,0.12);
-  --hse-border-strong: rgba(148,163,184,0.28);
-
-  --hse-text: #e5e7eb;
-  --hse-text-main: var(--hse-text);
-  --hse-text-muted: rgba(229,231,235,0.72);
-  --hse-text-soft: rgba(229,231,235,0.58);
-  --hse-text-inverse: #0b1020;
-
-  --hse-primary: #60a5fa;
-  --hse-primary-dark: #3b82f6;
-
-  --hse-accent: #a78bfa;
-  --hse-accent-hover: #8b5cf6;
-  --hse-accent-soft: rgba(167,139,250,0.14);
-
-  --hse-info: #22d3ee;
-  --hse-info-dark: #06b6d4;
-  --hse-success: #34d399;
-  --hse-success-dark: #10b981;
-  --hse-warning: #fbbf24;
-  --hse-warning-dark: #f59e0b;
-  --hse-error: #fb7185;
-  --hse-error-dark: #f43f5e;
-
-  --hse-success-soft: rgba(52,211,153,0.12);
-  --hse-warning-soft: rgba(251,191,36,0.14);
-  --hse-error-soft: rgba(251,113,133,0.12);
-  --hse-info-soft: rgba(34,211,238,0.12);
-
-  --hse-hover: rgba(96,165,250,0.10);
-
-  --hse-shadow-sm: 0 1px 2px rgba(0,0,0,.35);
-  --hse-shadow-md: 0 10px 28px rgba(0,0,0,.45);
-  --hse-shadow-lg: 0 22px 60px rgba(0,0,0,.55);
-  --hse-shadow-glow: 0 0 28px rgba(167,139,250,.16);
-
-  --hse-gradient-primary: linear-gradient(135deg, rgba(96,165,250,1), rgba(167,139,250,1));
-  --hse-gradient-header: linear-gradient(135deg, rgba(96,165,250,0.92), rgba(34,211,238,0.85));
-  --hse-gradient-info: linear-gradient(135deg, rgba(34,211,238,0.16), rgba(34,211,238,0.06));
-  --hse-gradient-warning: linear-gradient(135deg, rgba(251,191,36,0.18), rgba(251,191,36,0.06));
-  --hse-gradient-success: linear-gradient(135deg, rgba(52,211,153,0.16), rgba(52,211,153,0.06));
-  --hse-gradient-danger: linear-gradient(135deg, rgba(251,113,133,0.16), rgba(251,113,133,0.06));
-
-  --hse-on-accent: #0b1020;
-  --hse-on-header: #0b1020;
-
-  --hse-badge-bg: rgba(255,255,255,0.06);
-  --hse-badge-border: rgba(255,255,255,0.14);
-  --hse-badge-fg: var(--hse-text);
-
-  --hse-bg-dynamic:
-    radial-gradient(900px 700px at 10% 10%, rgba(96,165,250,0.20), transparent 60%),
-    radial-gradient(900px 700px at 90% 25%, rgba(167,139,250,0.16), transparent 62%),
-    radial-gradient(900px 700px at 50% 95%, rgba(34,211,238,0.14), transparent 62%);
-}
-
-/* ... remainder unchanged ... */

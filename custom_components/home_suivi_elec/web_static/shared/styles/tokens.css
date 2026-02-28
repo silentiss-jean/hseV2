@@ -16,22 +16,10 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
   --hse_accent: var(--hse-primary, var(--primary-color));
   --hse_danger: var(--hse-error, var(--error-color));
 
-  /* Opacité du fond dynamique (0..1)
-     - toggle OFF => hse_panel.js met --hse-bg-dynamic-opacity à 0
-     - par défaut on laisse la valeur fournie par le thème, sinon fallback 0.55
-  */
+  /* Opacité du fond dynamique (0..1) */
   --hse-bg-dynamic-opacity: var(--hse-bg-dynamic-opacity, 0.55);
 }
 
-
-/* Plein écran du panel (dans le host web component)
-   - applique le fond du thème sur toute la surface
-   - applique le fond dynamique en overlay (sans assombrir artificiellement)
-
-   IMPORTANT:
-   - On évite position:fixed sur ::before (peut créer des bugs d'event/stacking dans certains navigateurs/contexts)
-   - On rend l'overlay en absolute dans .hse_page
-*/
 .hse_page {
   min-height: 100vh;
   padding: 16px;
@@ -39,9 +27,8 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
   box-sizing: border-box;
 
   position: relative;
-  isolation: isolate; /* force un stacking context sain */
+  isolation: isolate;
 
-  /* Base */
   background-color: var(--hse-bg);
 }
 
@@ -59,7 +46,6 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
   opacity: var(--hse-bg-dynamic-opacity);
   pointer-events: none;
 }
-
 
 .hse_shell { max-width: 1200px; margin: 0 auto; }
 .hse_header { display:flex; justify-content:space-between; gap:var(--hse_gap); align-items:center; }
@@ -81,7 +67,6 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
 
 .hse_input { border:1px solid var(--hse_border); background:transparent; color:inherit; border-radius:10px; padding:8px 10px; font-size:13px; min-width:260px; }
 
-/* Backward-compatible aliases used by some views */
 .hse_select { border:1px solid var(--hse_border); background:transparent; color:inherit; border-radius:10px; padding:8px 10px; font-size:13px; min-width:260px; }
 .hse_row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 8px 0; }
 
@@ -135,7 +120,7 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
   border: 1px solid var(--hse_border);
   border-radius: var(--hse_radius);
   padding: 10px;
-  background: color-mix(in srgb, var(--hse_card_bg) 92%, #000 8%);
+  background: color-mix(in srgb, var(--hse_card_bg) 92%, var(--hse-bg) 8%);
 }
 
 .hse_list_title { font-size: 14px; font-weight: 800; margin-bottom: 8px; }
@@ -152,14 +137,6 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
 .hse_list_left { min-width: 0; }
 .hse_list_right { font-family: var(--hse-number-font-family, ui-monospace); font-weight: 800; }
 
-.hse_section_title {
-  margin: 14px 0 6px 0;
-  font-size: 12px;
-  letter-spacing: 0.2px;
-  text-transform: uppercase;
-  color: var(--hse_muted);
-}
-
 .hse_badges { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 .hse_badge {
   border: 1px solid var(--hse_border);
@@ -167,21 +144,9 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
   padding: 5px 10px;
   font-size: 12px;
   color: var(--hse_muted);
-  background: color-mix(in srgb, var(--hse_card_bg) 85%, #000 15%);
+  background: color-mix(in srgb, var(--hse_card_bg) 85%, var(--hse-bg) 15%);
 }
 .hse_badge_warn { border-color: color-mix(in srgb, var(--hse_danger) 55%, var(--hse_border) 45%); }
-
-/* Status badges */
-.hse_badge_status_ok {
-  border-color: color-mix(in srgb, var(--hse_accent) 45%, var(--hse_border) 55%);
-  color: color-mix(in srgb, var(--hse_accent) 60%, var(--hse_muted) 40%);
-}
-.hse_badge_status_warn {
-  border-color: color-mix(in srgb, var(--hse_danger) 45%, var(--hse_border) 55%);
-  color: color-mix(in srgb, var(--hse_danger) 55%, var(--hse_muted) 45%);
-}
-
-.hse_summary { margin: 8px 0 12px 0; }
 
 .hse_groups { margin-top: 8px; display: grid; gap: 10px; }
 
@@ -190,30 +155,6 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
   .hse_grid_2col { grid-template-columns: 1fr; }
 }
 
-.hse_fold {
-  border: 1px solid var(--hse_border);
-  border-radius: var(--hse_radius);
-  background: color-mix(in srgb, var(--hse_card_bg) 92%, #000 8%);
-  overflow: hidden;
-}
-
-.hse_fold_summary {
-  list-style: none;
-  cursor: pointer;
-  display: flex;
-  justify-content: space-between;
-  gap: var(--hse_gap);
-  padding: 10px 12px;
-  user-select: none;
-}
-.hse_fold_summary::-webkit-details-marker { display:none; }
-
-.hse_fold_title { font-size: 14px; }
-
-.hse_fold_body { padding: 10px 12px; border-top: 1px solid var(--hse_border); }
-
-.hse_candidate_list { display: grid; gap: 8px; }
-
 .hse_candidate_row {
   display: flex;
   justify-content: space-between;
@@ -221,11 +162,8 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
   padding: 8px 10px;
   border: 1px solid var(--hse_border);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--hse_card_bg) 88%, #000 12%);
+  background: color-mix(in srgb, var(--hse_card_bg) 88%, var(--hse-bg) 12%);
 }
-
-.hse_candidate_main { min-width: 0; }
-.hse_candidate_meta { display:flex; align-items:flex-start; }
 
 .hse_mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;

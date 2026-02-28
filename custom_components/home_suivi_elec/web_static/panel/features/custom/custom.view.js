@@ -2,6 +2,7 @@
   const { el, clear } = window.hse_dom;
 
   const THEMES = [
+    { key: "ha", label: "Home Assistant (thème HA)" },
     { key: "dark", label: "Dark (sobre)" },
     { key: "light", label: "Light" },
     { key: "ocean", label: "Ocean" },
@@ -23,10 +24,6 @@
     const row = el("div", "hse_toolbar");
 
     const select = document.createElement("select");
-    // IMPORTANT: les styles définissent .hse_input sur des <input>,
-    // mais on l'utilise aussi ici pour un <select>.
-    // Certains navigateurs / resets (ou CSS existant) peuvent masquer un select stylé.
-    // On force un minimum de rendu natif fiable.
     select.className = "hse_input";
     select.style.display = "inline-block";
     select.style.visibility = "visible";
@@ -40,13 +37,12 @@
       select.appendChild(opt);
     }
 
-    select.value = state.theme || "dark";
+    select.value = state.theme || "ha";
     select.addEventListener("change", (ev) => on_action("set_theme", ev.target.value));
 
     row.appendChild(select);
     card.appendChild(row);
 
-    // Toggles simples (optionnels)
     const toggles = el("div", "hse_badges");
 
     const btn_bg = el("button", "hse_button", state.dynamic_bg ? "Fond: ON" : "Fond: OFF");
