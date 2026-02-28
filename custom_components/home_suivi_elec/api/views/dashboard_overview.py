@@ -64,6 +64,10 @@ def _mk_period_row(period: str) -> dict:
     }
 
 
+def _mk_empty_period_table() -> list[dict]:
+    return [_mk_period_row(p) for p in ("hour", "day", "week", "month", "year")]
+
+
 class DashboardOverviewView(HomeAssistantView):
     url = f"{API_PREFIX}/dashboard"
     name = "home_suivi_elec:unified:dashboard_overview"
@@ -140,7 +144,10 @@ class DashboardOverviewView(HomeAssistantView):
             "year": {"energy_kwh": None, "conso_ht": None, "conso_ttc": None, "subscription_ht": None, "subscription_ttc": None, "total_ht": None, "total_ttc": None},
         }
 
-        cumulative_table = [_mk_period_row(p) for p in ("hour", "day", "week", "month", "year")]
+        cumulative_table = _mk_empty_period_table()
+        reference_table = _mk_empty_period_table() if reference else []
+        delta_table = _mk_empty_period_table() if reference else []
+
         per_sensor_costs = [
             {
                 "entity_id": r["entity_id"],
@@ -170,6 +177,8 @@ class DashboardOverviewView(HomeAssistantView):
                 "delta": delta,
                 "totals": totals,
                 "cumulative_table": cumulative_table,
+                "reference_table": reference_table,
+                "delta_table": delta_table,
                 "per_sensor_costs": per_sensor_costs,
                 "warnings": warnings,
             }

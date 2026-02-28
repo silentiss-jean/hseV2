@@ -37,8 +37,14 @@ HSE_MAINTENANCE: If you add/remove semantic tokens consumed by components or the
   --hse-table-header-bg: var(--hse-gradient-header);
   --hse-table-header-color: var(--hse-on-header);
   --hse-table-header-weight: 800;
-  --hse-table-body-color: var(--hse-text);
-  --hse-table-body-muted-color: var(--hse-text-muted);
+
+  /* Overview semantic tokens */
+  --hse-pill-bg: var(--hse-gradient-header);
+  --hse-pill-fg: var(--hse-on-header);
+  --hse-kpi-bg: color-mix(in srgb, var(--hse-surface) 86%, var(--hse-bg) 14%);
+  --hse-kpi-border: var(--hse-border);
+  --hse-kpi-value-color: var(--hse-text);
+  --hse-kpi-total-color: var(--hse-primary);
 
   /* Surfaces */
   --hse-bg: #f7f9ff;

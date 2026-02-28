@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-27_1742_fix_blank_tabs_restore_panel_and_overview";
+const build_signature = "2026-02-28_1109_overview_dashboard_layout_and_tokens";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.13";
+  const ASSET_V = "0.1.14";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },

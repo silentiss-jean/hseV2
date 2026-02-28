@@ -1,11 +1,34 @@
 (function () {
   async function fetch_overview(hass) {
-    const dashboard = await hass.callApi("GET", "home_suivi_elec/unified/dashboard");
+    const started_at = Date.now();
 
-    return {
-      fetched_at: new Date().toISOString(),
-      dashboard,
-    };
+    try {
+      const dashboard = await hass.callApi("GET", "home_suivi_elec/unified/dashboard");
+      return {
+        fetched_at: new Date().toISOString(),
+        fetch_ms: Date.now() - started_at,
+        dashboard,
+      };
+    } catch (err) {
+      const details = {
+        message: err?.message || String(err),
+        status: err?.status,
+        body: err?.body,
+      };
+
+      let extra = null;
+      try {
+        extra = JSON.stringify(details, null, 2);
+      } catch (_) {
+        extra = String(details.message);
+      }
+
+      return {
+        fetched_at: new Date().toISOString(),
+        fetch_ms: Date.now() - started_at,
+        error: `dashboard_fetch_failed\n${extra}`,
+      };
+    }
   }
 
   // Backward-compatible name used by hse_panel.js (overview refresh button)

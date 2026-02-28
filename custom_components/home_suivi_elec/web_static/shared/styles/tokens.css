@@ -72,6 +72,7 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
 
 .hse_card { background:var(--hse_card_bg); border:1px solid var(--hse_border); border-radius:var(--hse_radius); padding:12px; margin:12px 0; }
 .hse_card_inner { margin: 0; }
+.hse_card_compact { margin: 0; }
 
 .hse_toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 8px 0; }
 .hse_button { border:1px solid var(--hse_border); background:transparent; color:inherit; border-radius:10px; padding:8px 10px; cursor:pointer; font-size:13px; }
@@ -85,8 +86,71 @@ HSE_MAINTENANCE: If you change CSS class contracts used by views (hse_*) or data
 .hse_row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 8px 0; }
 
 .hse_table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
-.hse_table th, .hse_table td { border-top:1px solid var(--hse_border); padding:8px; text-align:left; vertical-align:top; }
+.hse_table thead th {
+  background: var(--hse-table-header-bg);
+  color: var(--hse-table-header-color);
+  font-weight: var(--hse-table-header-weight);
+  border-top: 0;
+}
+.hse_table th, .hse_table td { border-top:1px solid var(--hse_border); padding:10px 10px; text-align:left; vertical-align:top; }
+.hse_table tbody tr:hover { background: color-mix(in srgb, var(--hse_hover, var(--hse-hover)) 25%, transparent); }
 .hse_code { border:1px solid var(--hse_border); border-radius:10px; padding:10px; overflow:auto; max-height:420px; white-space:pre-wrap; word-break:break-word; background: color-mix(in srgb, var(--hse_card_bg) 86%, var(--hse-bg) 14%); }
+
+.hse_pill_title {
+  display: inline-block;
+  margin: 2px 0 10px 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--hse-pill-bg);
+  color: var(--hse-pill-fg);
+  font-weight: 800;
+}
+
+.hse_kpi_grid { display:grid; grid-template-columns: repeat(3, 1fr); gap: var(--hse_gap); margin-top: 10px; }
+@media (max-width: 900px) { .hse_kpi_grid { grid-template-columns: 1fr; } }
+
+.hse_kpi_card {
+  border: 1px solid var(--hse-kpi-border, var(--hse_border));
+  border-radius: var(--hse_radius);
+  padding: 12px;
+  background: var(--hse-kpi-bg);
+}
+
+.hse_kpi_title { font-size: 14px; font-weight: 800; margin-bottom: 6px; }
+.hse_kpi_value { color: var(--hse-kpi-value-color); font-weight: 650; }
+
+.hse_kpi_total {
+  display:flex;
+  justify-content:space-between;
+  gap: var(--hse_gap);
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hse_border);
+}
+.hse_kpi_total_value { color: var(--hse-kpi-total-color); font-weight: 900; }
+
+.hse_grid_tight { gap: 10px; }
+
+.hse_list_box {
+  border: 1px solid var(--hse_border);
+  border-radius: var(--hse_radius);
+  padding: 10px;
+  background: color-mix(in srgb, var(--hse_card_bg) 92%, #000 8%);
+}
+
+.hse_list_title { font-size: 14px; font-weight: 800; margin-bottom: 8px; }
+
+.hse_list_row {
+  display:flex;
+  justify-content:space-between;
+  gap: var(--hse_gap);
+  padding: 8px 10px;
+  border-top: 1px solid var(--hse_border);
+}
+.hse_list_row:first-of-type { border-top: 0; }
+
+.hse_list_left { min-width: 0; }
+.hse_list_right { font-family: var(--hse-number-font-family, ui-monospace); font-weight: 800; }
 
 .hse_section_title {
   margin: 14px 0 6px 0;
