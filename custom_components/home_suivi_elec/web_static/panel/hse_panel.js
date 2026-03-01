@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-02-28_1748_restore_tabs_and_fix_theme_switching";
+const build_signature = "2026-03-01_1908_config_dedup_autoselect";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.16";
+  const ASSET_V = "0.1.17";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -72,6 +72,7 @@ const build_signature = "2026-02-28_1748_restore_tabs_and_fix_theme_switching";
         pricing: null,
         pricing_defaults: null,
         pricing_draft: null,
+        cost_filter_q: "",
       };
 
       this._boot_done = false;
@@ -131,6 +132,8 @@ const build_signature = "2026-02-28_1748_restore_tabs_and_fix_theme_switching";
         const rawSel = this._storage_get("hse_diag_selected");
         if (rawSel) this._diag_state.selected = JSON.parse(rawSel) || {};
       } catch (_) {}
+
+      this._config_state.cost_filter_q = this._storage_get("hse_config_cost_filter_q") || "";
 
       this._root = this.attachShadow({ mode: "open" });
       this._boot();
@@ -455,6 +458,51 @@ const build_signature = "2026-02-28_1748_restore_tabs_and_fix_theme_switching";
         }
       };
 
+      const _group_key_for_candidate = (c) => {
+        if (!c || !c.device_id) return null;
+        return `${c.device_id}|${c.kind || ""}|${c.device_class || ""}|${c.state_class || ""}`;
+      };
+
+      const _candidate_index = () => {
+        const items = Array.isArray(this._config_state.scan_result?.candidates) ? this._config_state.scan_result.candidates : [];
+        const map = new Map();
+        for (const c of items) {
+          if (!c || !c.entity_id) continue;
+          map.set(c.entity_id, c);
+        }
+        return map;
+      };
+
+      const _validate_no_duplicate_groups = (entity_ids) => {
+        const idx = _candidate_index();
+        const seen = new Map();
+        const conflicts = new Map();
+
+        for (const eid of entity_ids || []) {
+          const c = idx.get(eid);
+          if (!c) continue;
+          const gk = _group_key_for_candidate(c);
+          if (!gk) continue;
+
+          const prev = seen.get(gk);
+          if (!prev) {
+            seen.set(gk, eid);
+            continue;
+          }
+
+          conflicts.set(gk, [prev, eid]);
+        }
+
+        if (!conflicts.size) return null;
+
+        const lines = [];
+        lines.push("doublons:interdit");
+        for (const [gk, pair] of conflicts.entries()) {
+          lines.push(`${gk} -> ${pair.join(" , ")}`);
+        }
+        return lines.join("\n");
+      };
+
       if (!this._config_state.catalogue && !this._config_state.loading) {
         this._config_state.loading = true;
         this._config_state.error = null;
@@ -497,6 +545,42 @@ const build_signature = "2026-02-28_1748_restore_tabs_and_fix_theme_switching";
           cur[parts[parts.length - 1]] = v;
         };
 
+        if (action === "cost_filter") {
+          this._config_state.cost_filter_q = value || "";
+          this._storage_set("hse_config_cost_filter_q", this._config_state.cost_filter_q);
+          this._render();
+          return;
+        }
+
+        if (action === "cost_auto_select") {
+          const entity_ids = Array.isArray(value?.entity_ids) ? value.entity_ids : [];
+          _ensure_pricing_draft();
+          this._config_state.pricing_draft.cost_entity_ids = entity_ids;
+          if (_remove_ref_from_cost()) {
+            this._config_state.pricing_message = "Garde-fou: le capteur de référence a été retiré des capteurs de calcul.";
+          } else {
+            this._config_state.pricing_message = `Sélection automatique appliquée (${entity_ids.length} capteurs).`;
+          }
+          this._config_state.pricing_error = null;
+          this._render();
+          return;
+        }
+
+        if (action === "pricing_list_replace") {
+          const from = value?.from_entity_id;
+          const to = value?.to_entity_id;
+          if (!from || !to) return;
+
+          const ids = _cost_ids().filter((x) => x !== from);
+          if (!ids.includes(to)) ids.push(to);
+          this._config_state.pricing_draft.cost_entity_ids = ids;
+
+          this._config_state.pricing_message = `Remplacement: ${from} → ${to}`;
+          this._config_state.pricing_error = null;
+          this._render();
+          return;
+        }
+
         if (action === "select_reference") {
           this._config_state.selected_reference_entity_id = value;
           this._config_state.message = null;
@@ -535,6 +619,25 @@ const build_signature = "2026-02-28_1748_restore_tabs_and_fix_theme_switching";
           }
 
           const ids = _cost_ids();
+
+          // Duplicate group guardrail
+          const idx = _candidate_index();
+          const cand = idx.get(eid);
+          const gk = _group_key_for_candidate(cand);
+          if (gk) {
+            for (const existing of ids) {
+              const cc = idx.get(existing);
+              if (!cc) continue;
+              const gg = _group_key_for_candidate(cc);
+              if (gg && gg === gk && existing !== eid) {
+                this._config_state.pricing_message = `Doublon interdit: ${eid} est équivalent à ${existing} (même appareil). Utilise Remplacer.`;
+                this._config_state.pricing_error = null;
+                this._render();
+                return;
+              }
+            }
+          }
+
           if (!ids.includes(eid)) ids.push(eid);
           this._config_state.pricing_draft.cost_entity_ids = ids;
           this._config_state.pricing_message = null;
@@ -584,6 +687,14 @@ const build_signature = "2026-02-28_1748_restore_tabs_and_fix_theme_switching";
 
           if (_remove_ref_from_cost()) {
             this._config_state.pricing_message = "Garde-fou: le capteur de référence a été retiré des capteurs de calcul.";
+          }
+
+          const errDup = _validate_no_duplicate_groups(_cost_ids());
+          if (errDup) {
+            this._config_state.pricing_error = errDup;
+            this._config_state.pricing_message = "Impossible de sauvegarder: doublons détectés dans la sélection.";
+            this._render();
+            return;
           }
 
           const ok = window.confirm("Sauvegarder ces tarifs (et la sélection de capteurs) ?");
@@ -707,6 +818,8 @@ const build_signature = "2026-02-28_1748_restore_tabs_and_fix_theme_switching";
         }
       });
     }
+
+    /* the rest of the file is unchanged (enrich/diagnostic/custom/overview/scan) */
 
     async _render_enrich() {
       const container = this._ui.content;

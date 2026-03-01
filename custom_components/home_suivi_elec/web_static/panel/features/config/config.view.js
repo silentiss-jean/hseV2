@@ -35,6 +35,9 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     }
 
     out.sort((a, b) => {
+      const ai = String(a.integration_domain || "");
+      const bi = String(b.integration_domain || "");
+      if (ai !== bi) return ai.localeCompare(bi);
       const an = String(a.name || a.entity_id || "");
       const bn = String(b.name || b.entity_id || "");
       return an.localeCompare(bn);
@@ -123,6 +126,200 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     return table;
   }
 
+  function _filter_candidates(candidates, q) {
+    if (!q) return candidates;
+    const needle = String(q || "").toLowerCase();
+    return candidates.filter((c) => {
+      const hay = `${c.entity_id} ${c.name} ${c.integration_domain} ${c.kind} ${c.unit} ${c.state_class} ${c.status} ${c.ha_state}`.toLowerCase();
+      return hay.includes(needle);
+    });
+  }
+
+  function _group_by_integration(candidates) {
+    const map = new Map();
+    for (const c of candidates) {
+      const key = c.integration_domain || "unknown";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(c);
+    }
+    const groups = [];
+    for (const [integration_domain, items] of map.entries()) {
+      items.sort((a, b) => String(a.name || a.entity_id || "").localeCompare(String(b.name || b.entity_id || "")));
+      groups.push({ integration_domain, items, total: items.length });
+    }
+    groups.sort((a, b) => {
+      if (b.total !== a.total) return b.total - a.total;
+      return a.integration_domain.localeCompare(b.integration_domain);
+    });
+    return groups;
+  }
+
+  function _status_label(status) {
+    const s = String(status || "").toLowerCase();
+    if (s === "ok") return "ok";
+    if (s === "disabled") return "disabled";
+    if (s === "not_provided") return "not provided";
+    if (s) return s;
+    return "—";
+  }
+
+  function _status_class(status) {
+    const s = String(status || "").toLowerCase();
+    if (s === "ok") return "hse_badge_status_ok";
+    if (s === "not_provided" || s === "disabled") return "hse_badge_status_warn";
+    return "";
+  }
+
+  function _ha_state_class(ha_state, ha_restored) {
+    const s = String(ha_state || "").toLowerCase();
+    if (s === "unavailable" || s === "unknown") return "hse_badge_status_warn";
+    if (ha_restored) return "hse_badge_status_warn";
+    return "";
+  }
+
+  function _group_key(c) {
+    if (!c || !c.device_id) return null;
+    // Intentionally ignore unit to catch W vs kW and other naming variants.
+    return `${c.device_id}|${c.kind || ""}|${c.device_class || ""}|${c.state_class || ""}`;
+  }
+
+  function _score_candidate(c) {
+    let s = 0;
+
+    const status = String(c.status || "").toLowerCase();
+    if (status === "ok") s += 30;
+    else if (status) s -= 80;
+
+    const st = String(c.ha_state || "").toLowerCase();
+    if (st === "unknown" || st === "unavailable") s -= 60;
+
+    if (c.ha_restored) s -= 10;
+
+    if (c.device_id) s += 10;
+    if (c.unique_id) s += 2;
+
+    if (c.state_class === "measurement") s += 2;
+
+    const integ = String(c.integration_domain || "").toLowerCase();
+    if (integ === "tplink") s += 2; // official tie-break
+    else if (integ === "tapo") s += 1;
+
+    return s;
+  }
+
+  function _build_duplicate_index(all_candidates) {
+    const by_group = new Map();
+    const eid_to_group = {};
+
+    for (const c of all_candidates || []) {
+      const gk = _group_key(c);
+      if (!gk) continue;
+      eid_to_group[c.entity_id] = gk;
+      if (!by_group.has(gk)) by_group.set(gk, []);
+      by_group.get(gk).push(c);
+    }
+
+    const group_meta = new Map();
+    for (const [gk, items] of by_group.entries()) {
+      if (!items || items.length <= 1) continue;
+      let best = items[0];
+      for (const c of items.slice(1)) {
+        const sa = _score_candidate(best);
+        const sb = _score_candidate(c);
+        if (sb > sa) best = c;
+        else if (sb === sa) {
+          const ia = String(best.integration_domain || "").toLowerCase();
+          const ib = String(c.integration_domain || "").toLowerCase();
+          if (ib === "tplink" && ia !== "tplink") best = c;
+        }
+      }
+      group_meta.set(gk, { size: items.length, best_entity_id: best.entity_id });
+    }
+
+    return { by_group, eid_to_group, group_meta };
+  }
+
+  function _render_candidate_groups(container, groups, opts) {
+    clear(container);
+
+    const box = el("div", "hse_groups");
+
+    for (const g of groups) {
+      const details = document.createElement("details");
+      details.className = "hse_fold";
+      details.open = opts?.open_by_default === true;
+
+      const summary_el = document.createElement("summary");
+      summary_el.className = "hse_fold_summary";
+
+      const left = el("div", "hse_fold_left");
+      left.appendChild(el("div", "hse_fold_title", g.integration_domain));
+
+      const right = el("div", "hse_badges");
+      right.appendChild(el("span", "hse_badge", `total: ${g.total}`));
+
+      summary_el.appendChild(left);
+      summary_el.appendChild(right);
+
+      const body = el("div", "hse_fold_body");
+
+      const list = el("div", "hse_candidate_list");
+
+      for (const c of g.items) {
+        const row = el("div", "hse_candidate_row");
+
+        const main = el("div", "hse_candidate_main");
+        main.appendChild(el("div", "hse_mono", c.entity_id));
+        if (c.name && c.name !== c.entity_id) main.appendChild(el("div", "hse_subtitle", c.name));
+
+        const meta = el("div", "hse_candidate_meta");
+        const badges = el("div", "hse_badges");
+
+        badges.appendChild(el("span", "hse_badge", c.integration_domain || "—"));
+        if (c.kind) badges.appendChild(el("span", "hse_badge", c.kind));
+
+        if (c.status) {
+          const klass = `hse_badge ${_status_class(c.status)}`.trim();
+          const st = el("span", klass, `status: ${_status_label(c.status)}`);
+          if (c.status_reason) st.title = String(c.status_reason);
+          badges.appendChild(st);
+        }
+
+        if (c.ha_state) {
+          const klass = `hse_badge ${_ha_state_class(c.ha_state, c.ha_restored)}`.trim();
+          const st2 = el("span", klass, `state: ${c.ha_state}`);
+          if (c.ha_restored) st2.title = "restored: true";
+          badges.appendChild(st2);
+        }
+
+        if (c.unit) badges.appendChild(el("span", "hse_badge", c.unit));
+        if (c.state_class) badges.appendChild(el("span", "hse_badge", c.state_class));
+
+        const dup = opts?.get_dup_badge?.(c);
+        if (dup) badges.appendChild(dup);
+
+        meta.appendChild(badges);
+
+        const actions = el("div", "hse_toolbar");
+        const btn = opts?.make_action_button?.(c);
+        if (btn) actions.appendChild(btn);
+
+        row.appendChild(main);
+        row.appendChild(meta);
+        row.appendChild(actions);
+        list.appendChild(row);
+      }
+
+      body.appendChild(list);
+
+      details.appendChild(summary_el);
+      details.appendChild(body);
+      box.appendChild(details);
+    }
+
+    container.appendChild(box);
+  }
+
   function render_config(container, model, on_action) {
     clear(container);
 
@@ -151,6 +348,20 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     const hadRefConflict = !!(effectiveRef && selectedIdsRaw.includes(effectiveRef));
 
     const candidatesForCost = effectiveRef ? candidates.filter((c) => c.entity_id !== effectiveRef) : candidates;
+
+    // Duplicate index (power + energy for reporting)
+    const allCandidates = Array.isArray(model.scan_result?.candidates) ? model.scan_result.candidates : [];
+    const { by_group, eid_to_group, group_meta } = _build_duplicate_index(allCandidates);
+
+    const selectedByGroup = new Map();
+    for (const eid of selectedIds) {
+      const gk = eid_to_group[eid];
+      if (!gk) continue;
+      // If multiple selected somehow, keep first for UI hinting.
+      if (!selectedByGroup.has(gk)) selectedByGroup.set(gk, eid);
+    }
+
+    const filter_q = model.cost_filter_q || "";
 
     // 1) Pricing panel
     const pricingCard = el("div", "hse_card");
@@ -392,42 +603,200 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       costCard.appendChild(badges);
     }
 
+    // Smart auto-selection (power-only for now)
+    const autoCard = el("div", "hse_card hse_card_inner");
+    autoCard.appendChild(el("div", null, "Sélection automatique intelligente"));
+    autoCard.appendChild(
+      el(
+        "div",
+        "hse_subtitle",
+        "Le système choisit 1 seul capteur power (W/kW) par appareil (device_id) pour éviter les doublons, et départage via un score de fiabilité (tie-break: tplink)."
+      )
+    );
+
+    const btnAuto = el("button", "hse_button hse_button_primary", "Lancer la sélection automatique");
+    btnAuto.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
+    btnAuto.addEventListener("click", () => {
+      const powerCandidates = candidatesForCost.slice();
+      const byGk = new Map();
+      for (const c of powerCandidates) {
+        const gk = _group_key(c);
+        if (!gk) continue;
+        if (!byGk.has(gk)) byGk.set(gk, []);
+        byGk.get(gk).push(c);
+      }
+
+      const picked = [];
+      for (const items of byGk.values()) {
+        if (!items || !items.length) continue;
+        let best = items[0];
+        for (const c of items.slice(1)) {
+          const sa = _score_candidate(best);
+          const sb = _score_candidate(c);
+          if (sb > sa) best = c;
+          else if (sb === sa) {
+            const ia = String(best.integration_domain || "").toLowerCase();
+            const ib = String(c.integration_domain || "").toLowerCase();
+            if (ib === "tplink" && ia !== "tplink") best = c;
+          }
+        }
+        picked.push(best.entity_id);
+      }
+
+      picked.sort((a, b) => String(a).localeCompare(String(b)));
+      on_action("cost_auto_select", { entity_ids: picked });
+    });
+
+    autoCard.appendChild(btnAuto);
+    costCard.appendChild(autoCard);
+
+    // Filter
+    const filterRow = el("div", "hse_toolbar");
+    const input = document.createElement("input");
+    input.className = "hse_input";
+    input.placeholder = "Filtrer (entity_id, nom, intégration, unit, state…)";
+    input.value = filter_q;
+    input.addEventListener("input", (ev) => on_action("cost_filter", ev.target.value));
+    filterRow.appendChild(input);
+    costCard.appendChild(filterRow);
+
     const grid = el("div", "hse_grid_2col");
 
     const left = el("div", "hse_card hse_card_inner");
-    const avail = candidatesForCost.filter((c) => !selectedSet.has(c.entity_id));
+    const avail = _filter_candidates(candidatesForCost.filter((c) => !selectedSet.has(c.entity_id)), filter_q);
     left.appendChild(el("div", null, `Disponibles (${avail.length})`));
-    left.appendChild(
-      _mk_table(avail, [
-        { label: "Nom", value: (c) => c.name || "" },
-        { label: "Entity", value: (c) => el("span", "hse_mono", c.entity_id || "") },
-        {
-          label: "",
-          value: (c) => _mk_button("Ajouter", () => on_action("pricing_list_add", { entity_id: c.entity_id })),
-        },
-      ])
-    );
 
     const right = el("div", "hse_card hse_card_inner");
-    const selectedRows = candidatesForCost
-      .filter((c) => selectedSet.has(c.entity_id))
-      .sort((a, b) => String(a.name || a.entity_id || "").localeCompare(String(b.name || b.entity_id || "")));
+    const selectedRows = _filter_candidates(
+      candidatesForCost
+        .filter((c) => selectedSet.has(c.entity_id))
+        .sort((a, b) => String(a.name || a.entity_id || "").localeCompare(String(b.name || b.entity_id || ""))),
+      filter_q
+    );
 
     right.appendChild(el("div", null, `Sélectionnés (${selectedIds.length})`));
-    right.appendChild(
-      _mk_table(selectedRows, [
-        { label: "Nom", value: (c) => c.name || "" },
-        { label: "Entity", value: (c) => el("span", "hse_mono", c.entity_id || "") },
-        {
-          label: "",
-          value: (c) => _mk_button("Retirer", () => on_action("pricing_list_remove", { entity_id: c.entity_id })),
-        },
-      ])
-    );
+
+    const availGroups = _group_by_integration(avail);
+    const selGroups = _group_by_integration(selectedRows);
+
+    const _dup_badge = (c) => {
+      const gk = _group_key(c);
+      if (!gk) return null;
+      const meta = group_meta.get(gk);
+      if (!meta) return null;
+      const blockedBy = selectedByGroup.get(gk);
+      const badge = el("span", "hse_badge hse_badge_warn", "doublon");
+      badge.title = `Doublon détecté (${meta.size}). Best: ${meta.best_entity_id}`;
+      if (blockedBy && blockedBy !== c.entity_id) badge.title = `Doublon: déjà sélectionné (${blockedBy})`;
+      return badge;
+    };
+
+    _render_candidate_groups(left, availGroups, {
+      open_by_default: false,
+      get_dup_badge: _dup_badge,
+      make_action_button: (c) => {
+        const gk = _group_key(c);
+        const meta = gk ? group_meta.get(gk) : null;
+        const blockedBy = gk ? selectedByGroup.get(gk) : null;
+
+        if (meta && blockedBy && blockedBy !== c.entity_id) {
+          const b = el("button", "hse_button", "Remplacer");
+          b.title = `Remplace ${blockedBy} par ${c.entity_id}`;
+          b.addEventListener("click", () => on_action("pricing_list_replace", { from_entity_id: blockedBy, to_entity_id: c.entity_id }));
+          return b;
+        }
+
+        return _mk_button("Ajouter", () => on_action("pricing_list_add", { entity_id: c.entity_id }));
+      },
+    });
+
+    _render_candidate_groups(right, selGroups, {
+      open_by_default: false,
+      get_dup_badge: _dup_badge,
+      make_action_button: (c) => _mk_button("Retirer", () => on_action("pricing_list_remove", { entity_id: c.entity_id })),
+    });
 
     grid.appendChild(left);
     grid.appendChild(right);
     costCard.appendChild(grid);
+
+    // Duplicate summary (power + energy, informational)
+    const dupCard = el("div", "hse_card hse_card_inner");
+    const dupDetails = document.createElement("details");
+    dupDetails.className = "hse_fold";
+
+    const dupSum = document.createElement("summary");
+    dupSum.className = "hse_fold_summary";
+
+    const dupLeft = el("div", "hse_fold_left");
+    dupLeft.appendChild(el("div", "hse_fold_title", "Doublons détectés"));
+
+    let powerDup = 0;
+    let energyDup = 0;
+    for (const [gk, items] of by_group.entries()) {
+      if (!items || items.length <= 1) continue;
+      const kind = String(items[0]?.kind || "");
+      if (kind === "power") powerDup += 1;
+      else if (kind === "energy") energyDup += 1;
+    }
+
+    const dupRight = el("div", "hse_badges");
+    dupRight.appendChild(el("span", "hse_badge", `power groups: ${powerDup}`));
+    dupRight.appendChild(el("span", "hse_badge", `energy groups: ${energyDup}`));
+
+    dupSum.appendChild(dupLeft);
+    dupSum.appendChild(dupRight);
+
+    const dupBody = el("div", "hse_fold_body");
+
+    const _render_dup_kind = (kind) => {
+      const groups = [];
+      for (const [gk, items] of by_group.entries()) {
+        if (!items || items.length <= 1) continue;
+        if (String(items[0]?.kind || "") !== kind) continue;
+        groups.push({ gk, items });
+      }
+      groups.sort((a, b) => a.gk.localeCompare(b.gk));
+
+      const box = el("div");
+      box.appendChild(el("div", "hse_section_title", kind === "power" ? "Doublons Power" : "Doublons Energy"));
+      if (!groups.length) {
+        box.appendChild(el("div", "hse_subtitle", "Aucun."));
+        return box;
+      }
+
+      const rows = [];
+      for (const g of groups) {
+        const meta = group_meta.get(g.gk);
+        const label = meta?.best_entity_id ? `best: ${meta.best_entity_id}` : "";
+        rows.push({
+          key: g.gk,
+          label,
+          items: g.items
+            .map((c) => `${c.integration_domain || "?"}: ${c.entity_id}`)
+            .sort((a, b) => a.localeCompare(b))
+            .join("\n"),
+        });
+      }
+
+      box.appendChild(
+        _mk_table(rows, [
+          { label: "Groupe", value: (r) => el("span", "hse_mono", r.key) },
+          { label: "Choix", value: (r) => r.label },
+          { label: "Capteurs", value: (r) => el("pre", "hse_code", r.items) },
+        ])
+      );
+
+      return box;
+    };
+
+    dupBody.appendChild(_render_dup_kind("power"));
+    dupBody.appendChild(_render_dup_kind("energy"));
+
+    dupDetails.appendChild(dupSum);
+    dupDetails.appendChild(dupBody);
+    dupCard.appendChild(dupDetails);
+    costCard.appendChild(dupCard);
 
     // Optional shortcut: save pricing+capteurs from this panel too
     const costToolbar = el("div", "hse_toolbar");
