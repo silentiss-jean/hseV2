@@ -603,51 +603,41 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       costCard.appendChild(badges);
     }
 
-    // Smart auto-selection (power-only for now)
+    // Smart auto-selection: use server suggestion if available
     const autoCard = el("div", "hse_card hse_card_inner");
     autoCard.appendChild(el("div", null, "Sélection automatique intelligente"));
     autoCard.appendChild(
       el(
         "div",
         "hse_subtitle",
-        "Le système choisit 1 seul capteur power (W/kW) par appareil (device_id) pour éviter les doublons, et départage via un score de fiabilité (tie-break: tplink)."
+        "Le système choisit 1 seul capteur power (W/kW) par appareil (device_id) pour éviter les doublons."
       )
     );
 
     const btnAuto = el("button", "hse_button hse_button_primary", "Lancer la sélection automatique");
     btnAuto.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
     btnAuto.addEventListener("click", () => {
-      const powerCandidates = candidatesForCost.slice();
-      const byGk = new Map();
-      for (const c of powerCandidates) {
-        const gk = _group_key(c);
-        if (!gk) continue;
-        if (!byGk.has(gk)) byGk.set(gk, []);
-        byGk.get(gk).push(c);
-      }
+      const suggestedRaw = Array.isArray(model.scan_result?.suggested_cost_entity_ids)
+        ? model.scan_result.suggested_cost_entity_ids
+        : [];
 
-      const picked = [];
-      for (const items of byGk.values()) {
-        if (!items || !items.length) continue;
-        let best = items[0];
-        for (const c of items.slice(1)) {
-          const sa = _score_candidate(best);
-          const sb = _score_candidate(c);
-          if (sb > sa) best = c;
-          else if (sb === sa) {
-            const ia = String(best.integration_domain || "").toLowerCase();
-            const ib = String(c.integration_domain || "").toLowerCase();
-            if (ib === "tplink" && ia !== "tplink") best = c;
-          }
-        }
-        picked.push(best.entity_id);
-      }
+      let picked = suggestedRaw.slice();
+      if (effectiveRef) picked = picked.filter((x) => x !== effectiveRef);
+      picked = Array.from(new Set(picked)).sort((a, b) => String(a).localeCompare(String(b)));
 
-      picked.sort((a, b) => String(a).localeCompare(String(b)));
       on_action("cost_auto_select", { entity_ids: picked });
     });
 
     autoCard.appendChild(btnAuto);
+
+    const sugSummary = model.scan_result?.suggested_summary;
+    if (sugSummary && typeof sugSummary === "object") {
+      const line = `suggestion: ${sugSummary.suggested_count ?? "?"} (groups: ${sugSummary.considered_groups ?? "?"}, power sans device_id: ${
+        sugSummary.skipped_power_no_device_id ?? "?"
+      })`;
+      autoCard.appendChild(el("div", "hse_subtitle", line));
+    }
+
     costCard.appendChild(autoCard);
 
     // Filter
@@ -795,6 +785,7 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
 
     dupDetails.appendChild(dupSum);
     dupDetails.appendChild(dupBody);
+
     dupCard.appendChild(dupDetails);
     costCard.appendChild(dupCard);
 
