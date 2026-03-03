@@ -66,6 +66,59 @@
     return el("div", "hse_pill_title", text);
   }
 
+  function _power_w_from_state(st) {
+    if (!st) return null;
+    const v = _num(st.state);
+    if (v == null) return null;
+    const unit = (st.attributes || {}).unit_of_measurement || "";
+    if (unit === "kW" || unit === "kw") return v * 1000.0;
+    return v;
+  }
+
+  function _refresh_live_from_hass(dash, hass) {
+    if (!dash || !hass || !hass.states) return;
+
+    const selected = Array.isArray(dash.selected) ? dash.selected : [];
+
+    for (const r of selected) {
+      const st = hass.states[r.entity_id];
+      if (!st) continue;
+      r.power_w = _power_w_from_state(st);
+      r.state = st.state;
+      r.unit = (st.attributes || {}).unit_of_measurement;
+      r.last_updated = st.last_updated || st.last_changed || null;
+      r.name = (st.attributes || {}).friendly_name || r.name || r.entity_id;
+    }
+
+    const top_src = selected.filter((r) => typeof r.power_w === "number" && Number.isFinite(r.power_w));
+    top_src.sort((a, b) => Number(b.power_w) - Number(a.power_w));
+
+    dash.top_live = {
+      bucket_100_500: top_src.filter((r) => 100.0 <= Number(r.power_w) && Number(r.power_w) <= 500.0).slice(0, 8),
+      bucket_gt_500: top_src.filter((r) => Number(r.power_w) > 500.0).slice(0, 8),
+    };
+
+    const total_w = selected.reduce((acc, r) => acc + (typeof r.power_w === "number" ? Number(r.power_w) : 0.0), 0.0);
+    dash.computed = dash.computed || {};
+    dash.computed.total_power_w = total_w;
+
+    if (dash.reference && dash.reference.entity_id) {
+      const ref_st = hass.states[dash.reference.entity_id];
+      if (ref_st) {
+        dash.reference.power_w = _power_w_from_state(ref_st);
+        dash.reference.state = ref_st.state;
+        dash.reference.unit = (ref_st.attributes || {}).unit_of_measurement;
+        dash.reference.last_updated = ref_st.last_updated || ref_st.last_changed || null;
+        dash.reference.name = (ref_st.attributes || {}).friendly_name || dash.reference.name || dash.reference.entity_id;
+      }
+
+      if (typeof dash.reference.power_w === "number" && Number.isFinite(dash.reference.power_w)) {
+        dash.delta = dash.delta || {};
+        dash.delta.power_w = Number(dash.reference.power_w) - Number(total_w);
+      }
+    }
+  }
+
   function _render_totals_card(container, title, totals) {
     const card = el("div", "hse_kpi_card");
     card.appendChild(el("div", "hse_kpi_title", title));
@@ -221,6 +274,8 @@
       return;
     }
 
+    _refresh_live_from_hass(dash, hass);
+
     const pricing = dash.pricing || dash.defaults || {};
 
     const cardSummary = el("div", "hse_card");
@@ -236,6 +291,7 @@
     if (dash.reference?.entity_id) {
       const ref_name = dash.reference.name || dash.reference.entity_id;
       cardSensors.appendChild(_mk_kv("Capteur externe de référence", ref_name, false));
+      cardSensors.appendChild(_mk_kv("Consommation référence (live)", _fmt_w(dash?.reference?.power_w), false));
       cardSensors.appendChild(_mk_kv("Conso actuelle non mesurée (Delta)", _fmt_w(dash?.delta?.power_w), false));
     }
 

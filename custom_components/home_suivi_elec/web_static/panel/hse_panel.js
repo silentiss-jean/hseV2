@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-02_1750_scan_suggested_autoselect";
+const build_signature = "2026-03-03_1008_overview_live_autorefresh_30s";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.18";
+  const ASSET_V = "0.1.19";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -30,6 +30,8 @@ const build_signature = "2026-03-02_1750_scan_suggested_autoselect";
 
       this._active_tab = "overview";
       this._overview_data = null;
+      this._overview_timer = null;
+      this._overview_refreshing = false;
 
       this._scan_result = { integrations: [], candidates: [] };
       this._scan_state = {
@@ -87,6 +89,10 @@ const build_signature = "2026-03-02_1750_scan_suggested_autoselect";
       };
 
       this._render_raf_scheduled = false;
+    }
+
+    disconnectedCallback() {
+      this._clear_overview_autorefresh();
     }
 
     set hass(hass) {
@@ -205,6 +211,42 @@ const build_signature = "2026-03-02_1750_scan_suggested_autoselect";
         card.appendChild(el("pre", "hse_code", this._err_msg(err)));
         this._ui.content.appendChild(card);
       } catch (_) {}
+    }
+
+    _clear_overview_autorefresh() {
+      if (this._overview_timer) {
+        try {
+          window.clearInterval(this._overview_timer);
+        } catch (_) {}
+      }
+      this._overview_timer = null;
+      this._overview_refreshing = false;
+    }
+
+    _ensure_overview_autorefresh() {
+      if (this._overview_timer) return;
+
+      const tick = async () => {
+        if (this._overview_refreshing) return;
+        this._overview_refreshing = true;
+
+        try {
+          const fn = window.hse_overview_api?.fetch_overview || window.hse_overview_api?.fetch_manifest_and_ping;
+          if (!fn) throw new Error("overview_api_not_loaded");
+          this._overview_data = await fn(this._hass);
+        } catch (err) {
+          this._overview_data = { error: this._err_msg(err) };
+        } finally {
+          this._overview_refreshing = false;
+          this._render();
+        }
+      };
+
+      this._overview_timer = window.setInterval(tick, 30000);
+
+      if (!this._overview_data) {
+        tick();
+      }
     }
 
     async _boot() {
@@ -338,6 +380,10 @@ const build_signature = "2026-03-02_1750_scan_suggested_autoselect";
       if (!this._hass) {
         this._ui.content.appendChild(window.hse_dom.el("div", "hse_card", "En attente de hass…"));
         return;
+      }
+
+      if (this._active_tab !== "overview") {
+        this._clear_overview_autorefresh();
       }
 
       try {
@@ -1070,6 +1116,8 @@ const build_signature = "2026-03-02_1750_scan_suggested_autoselect";
       const { el, clear } = window.hse_dom;
       const container = this._ui.content;
 
+      this._ensure_overview_autorefresh();
+
       const card = el("div", "hse_card");
       const toolbar = el("div", "hse_toolbar");
 
@@ -1097,7 +1145,7 @@ const build_signature = "2026-03-02_1750_scan_suggested_autoselect";
       container.appendChild(body);
 
       if (!this._overview_data) {
-        body.appendChild(el("div", "hse_subtitle", "Clique sur Rafraîchir."));
+        body.appendChild(el("div", "hse_subtitle", "Chargement…"));
         return;
       }
 
