@@ -32,8 +32,7 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
     last_err = None
 
     # Built-in helper config flows (integration, utility_meter) are meant to be created
-    # via the UI (source=user). Some of them do NOT support source=import, which triggers
-    # UnknownStep("... doesn't support step import").
+    # via the UI (source=user). Some of them do NOT support source=import.
     sources = ("user",)
 
     for data in data_variants:
@@ -52,7 +51,6 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
                 if isinstance(res, dict) and res.get("type") in ("create_entry", "abort"):
                     return {"ok": True, "result": res, "used_data": data}
 
-                # If still a form, keep trying other variants.
                 last_err = f"flow_not_completed:{src}:{(res or {}).get('type') if isinstance(res, dict) else type(res).__name__}"
             except Exception as exc:  # noqa: BLE001
                 last_err = f"flow_init_failed:{src}:{type(exc).__name__}:{exc}"
@@ -128,7 +126,6 @@ class EnrichApplyView(HomeAssistantView):
             "option1_utility_meter_yaml": _safe_yaml({"utility_meter": utility_meter_block}) if utility_meter_block else "# Rien à générer\n",
         }
 
-        # CREATE MODE: create HA helpers via config flows (best effort).
         if mode == "create_helpers":
             for base, info in sorted(bases.items()):
                 power_eid = info.get("power_entity_id")
@@ -156,7 +153,6 @@ class EnrichApplyView(HomeAssistantView):
                             pass
                     else:
                         errors.append({"entity_id": total_eid, "kind": "integration", "base": base, "error": res.get("error")})
-                        # If we cannot create the total sensor, utility meters likely can't be created either.
                         continue
                 else:
                     skipped.append({"entity_id": total_eid, "reason": "already_exists"})
@@ -176,11 +172,14 @@ class EnrichApplyView(HomeAssistantView):
                         skipped.append({"entity_id": meter_eid, "reason": "already_exists"})
                         continue
 
+                    # utility_meter config expects 'tariffs' to exist (can be empty)
+                    base_payload = {"source": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []}
+
                     data_variants = [
-                        {"source": total_eid, "name": meter_name, "cycle": cycle},
-                        {"source_sensor": total_eid, "name": meter_name, "cycle": cycle},
-                        {"source_entity_id": total_eid, "name": meter_name, "cycle": cycle},
-                        {"meter_id": meter_name, "source": total_eid, "name": meter_name, "cycle": cycle},
+                        base_payload,
+                        {"source_sensor": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []},
+                        {"source_entity_id": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []},
+                        {"meter_id": meter_name, "source": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []},
                     ]
 
                     res = await _try_create_helper_via_flow(hass=hass, domain="utility_meter", data_variants=data_variants)
@@ -194,7 +193,6 @@ class EnrichApplyView(HomeAssistantView):
                         errors.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "error": res.get("error")})
 
         else:
-            # export-only mode: keep behavior visible in skipped list
             for base in sorted(bases.keys()):
                 skipped.append({"entity_id": f"sensor.{base}_kwh_total", "reason": "export_ready"})
 
