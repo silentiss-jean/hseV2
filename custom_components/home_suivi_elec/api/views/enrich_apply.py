@@ -31,24 +31,30 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
 
     last_err = None
 
+    # Some built-in helpers (e.g. integration) don't support "import" source.
+    # Try "user" first, then fallback to "import" for flows that do support it.
+    sources = ("user", "import")
+
     for data in data_variants:
-        try:
-            res = await flow_mgr.async_init(domain, context={"source": "import"}, data=data)
+        for src in sources:
+            try:
+                res = await flow_mgr.async_init(domain, context={"source": src}, data=data)
 
-            # Some flows return a form; try to auto-configure if possible.
-            if isinstance(res, dict) and res.get("type") == "form" and res.get("flow_id"):
-                try:
-                    res = await flow_mgr.async_configure(res["flow_id"], user_input=data)
-                except Exception as exc:  # noqa: BLE001
-                    last_err = f"flow_configure_failed:{type(exc).__name__}:{exc}"
+                # Some flows return a form; try to auto-configure if possible.
+                if isinstance(res, dict) and res.get("type") == "form" and res.get("flow_id"):
+                    try:
+                        res = await flow_mgr.async_configure(res["flow_id"], user_input=data)
+                    except Exception as exc:  # noqa: BLE001
+                        last_err = f"flow_configure_failed:{src}:{type(exc).__name__}:{exc}"
+                        continue
 
-            if isinstance(res, dict) and res.get("type") in ("create_entry", "abort"):
-                return {"ok": True, "result": res, "used_data": data}
+                if isinstance(res, dict) and res.get("type") in ("create_entry", "abort"):
+                    return {"ok": True, "result": res, "used_data": data}
 
-            # If still a form, keep trying other variants.
-            last_err = f"flow_not_completed:{(res or {}).get('type') if isinstance(res, dict) else type(res).__name__}"
-        except Exception as exc:  # noqa: BLE001
-            last_err = f"flow_init_failed:{type(exc).__name__}:{exc}"
+                # If still a form, keep trying other variants.
+                last_err = f"flow_not_completed:{src}:{(res or {}).get('type') if isinstance(res, dict) else type(res).__name__}"
+            except Exception as exc:  # noqa: BLE001
+                last_err = f"flow_init_failed:{src}:{type(exc).__name__}:{exc}"
 
     return {"ok": False, "error": last_err or "unknown"}
 
