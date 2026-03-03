@@ -1,6 +1,20 @@
 (function () {
   const { el, clear } = window.hse_dom;
 
+  function _ls_get(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _ls_set(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (_) {}
+  }
+
   function _num(x) {
     const v = Number.parseFloat(String(x));
     return Number.isFinite(v) ? v : null;
@@ -199,17 +213,25 @@
 
   function _render_costs_per_sensor(container, dash) {
     const card = el("div", "hse_card");
-    card.appendChild(_pill_title("Coûts par capteur"));
+
+    const state = {
+      q: "",
+      open: (_ls_get("hse_overview_costs_open") || "0") === "1",
+    };
+
+    const header = el("div", "hse_card_header");
+    header.appendChild(_pill_title("Coûts par capteur"));
+
+    const actions = el("div", "hse_card_actions");
+    const btnToggle = el("button", "hse_button", state.open ? "Replier" : "Déplier");
+    actions.appendChild(btnToggle);
+    header.appendChild(actions);
+
+    card.appendChild(header);
 
     const all = Array.isArray(dash?.per_sensor_costs) ? dash.per_sensor_costs : [];
 
-    const state = { q: "" };
-
-    const subtitle = el(
-      "div",
-      "hse_subtitle",
-      `${all.length} capteurs · Triés par coût journalier décroissant`
-    );
+    const subtitle = el("div", "hse_subtitle", `${all.length} capteurs · Triés par coût journalier décroissant`);
     card.appendChild(subtitle);
 
     const input = document.createElement("input");
@@ -227,6 +249,13 @@
     const render = () => {
       clear(host);
 
+      btnToggle.textContent = state.open ? "Replier" : "Déplier";
+
+      if (!state.open) {
+        host.appendChild(el("div", "hse_subtitle", "Déplie pour voir le tableau (zone scrollée)."));
+        return;
+      }
+
       const q = state.q.trim().toLowerCase();
       const filtered = q
         ? all.filter((r) => String(r.name || r.entity_id || "").toLowerCase().includes(q))
@@ -239,14 +268,19 @@
         return;
       }
 
-      host.appendChild(
+      const scroll = el("div", "hse_scroll_area");
+      scroll.appendChild(
         _mk_table(filtered, [
           {
             label: "Capteur",
             value: (r) => {
               const wrap = el("div");
               wrap.appendChild(el("div", null, r.name || r.entity_id));
-              wrap.appendChild(el("div", "hse_subtitle", el("span", "hse_mono", r.entity_id || "")));
+
+              const sub = el("div", "hse_subtitle");
+              sub.appendChild(el("span", "hse_mono", r.entity_id || ""));
+              wrap.appendChild(sub);
+
               return wrap;
             },
           },
@@ -256,7 +290,15 @@
           { label: "Année (€)", value: (r) => _fmt_eur(r.year) },
         ])
       );
+
+      host.appendChild(scroll);
     };
+
+    btnToggle.addEventListener("click", () => {
+      state.open = !state.open;
+      _ls_set("hse_overview_costs_open", state.open ? "1" : "0");
+      render();
+    });
 
     render();
     container.appendChild(card);
@@ -357,9 +399,7 @@
           { label: "Total TTC (€)", value: (r) => _fmt_eur(r.total_ttc) },
         ])
       );
-      card.appendChild(
-        el("div", "hse_subtitle", "Les totaux incluent l'abonnement mensuel proratisé sur chaque période.")
-      );
+      card.appendChild(el("div", "hse_subtitle", "Les totaux incluent l'abonnement mensuel proratisé sur chaque période."));
       container.appendChild(card);
     }
 

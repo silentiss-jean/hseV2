@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-03_1008_overview_live_autorefresh_30s";
+const build_signature = "2026-03-03_1024_overview_costs_fold_scroll";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.19";
+  const ASSET_V = "0.1.20";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
