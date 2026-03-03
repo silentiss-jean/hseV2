@@ -240,7 +240,13 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
   }
 
   function _render_candidate_groups(container, groups, opts) {
-    clear(container);
+    if (opts?.clear !== false) clear(container);
+
+    if (Array.isArray(opts?.prepend)) {
+      for (const n of opts.prepend) {
+        if (n) container.appendChild(n);
+      }
+    }
 
     const box = el("div", "hse_groups");
 
@@ -351,6 +357,11 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
 
     // Duplicate index (power + energy for reporting)
     const allCandidates = Array.isArray(model.scan_result?.candidates) ? model.scan_result.candidates : [];
+    const allById = new Map();
+    for (const c of allCandidates) {
+      if (c && c.entity_id) allById.set(c.entity_id, c);
+    }
+
     const { by_group, eid_to_group, group_meta } = _build_duplicate_index(allCandidates);
 
     const selectedByGroup = new Map();
@@ -654,20 +665,28 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
 
     const left = el("div", "hse_card hse_card_inner");
     const avail = _filter_candidates(candidatesForCost.filter((c) => !selectedSet.has(c.entity_id)), filter_q);
-    left.appendChild(el("div", null, `Disponibles (${avail.length})`));
 
     const right = el("div", "hse_card hse_card_inner");
-    const selectedRows = _filter_candidates(
+
+    const selectedOk = _filter_candidates(
       candidatesForCost
         .filter((c) => selectedSet.has(c.entity_id))
         .sort((a, b) => String(a.name || a.entity_id || "").localeCompare(String(b.name || b.entity_id || ""))),
       filter_q
     );
 
-    right.appendChild(el("div", null, `Sélectionnés (${selectedIds.length})`));
+    const selectedNotOk = _filter_candidates(
+      selectedIds
+        .map((eid) => allById.get(eid))
+        .filter((c) => c && !selectedOk.some((x) => x.entity_id === c.entity_id)),
+      filter_q
+    );
+
+    const selectedUnknown = selectedIds.filter((eid) => !allById.get(eid));
 
     const availGroups = _group_by_integration(avail);
-    const selGroups = _group_by_integration(selectedRows);
+    const selGroupsOk = _group_by_integration(selectedOk);
+    const selGroupsNotOk = _group_by_integration(selectedNotOk);
 
     const _dup_badge = (c) => {
       const gk = _group_key(c);
@@ -682,6 +701,8 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     };
 
     _render_candidate_groups(left, availGroups, {
+      clear: true,
+      prepend: [el("div", null, `Disponibles (${avail.length})`)],
       open_by_default: false,
       get_dup_badge: _dup_badge,
       make_action_button: (c) => {
@@ -700,11 +721,44 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       },
     });
 
-    _render_candidate_groups(right, selGroups, {
+    _render_candidate_groups(right, selGroupsOk, {
+      clear: true,
+      prepend: [el("div", null, `Sélectionnés (${selectedIds.length})`)],
       open_by_default: false,
       get_dup_badge: _dup_badge,
       make_action_button: (c) => _mk_button("Retirer", () => on_action("pricing_list_remove", { entity_id: c.entity_id })),
     });
+
+    if (selectedNotOk.length) {
+      _render_candidate_groups(right, selGroupsNotOk, {
+        clear: false,
+        prepend: [
+          el("div", "hse_section_title", `Sélectionnés (non OK) (${selectedNotOk.length})`),
+          el(
+            "div",
+            "hse_subtitle",
+            "Ces capteurs sont bien enregistrés dans ta sélection, mais ils sont indisponibles/invalides selon le scan (status/state)."
+          ),
+        ],
+        open_by_default: false,
+        get_dup_badge: _dup_badge,
+        make_action_button: (c) => _mk_button("Retirer", () => on_action("pricing_list_remove", { entity_id: c.entity_id })),
+      });
+    }
+
+    if (selectedUnknown.length) {
+      const card = el("div", "hse_card hse_card_inner");
+      card.appendChild(el("div", "hse_section_title", `Sélectionnés (introuvables) (${selectedUnknown.length})`));
+      card.appendChild(
+        el(
+          "div",
+          "hse_subtitle",
+          "Ces entity_id ne sont pas trouvés dans le scan actuel (renommés, supprimés, intégration inactive…)."
+        )
+      );
+      card.appendChild(el("pre", "hse_code", selectedUnknown.join("\n")));
+      right.appendChild(card);
+    }
 
     grid.appendChild(left);
     grid.appendChild(right);

@@ -1,5 +1,5 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration";
+const build_signature = "2026-03-03_1701_config_auto_enrich_and_hide_tab";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
@@ -12,7 +12,6 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
     { id: "overview", label: "Accueil" },
     { id: "diagnostic", label: "Diagnostic" },
     { id: "scan", label: "Détection" },
-    { id: "enrich", label: "Enrichissement" },
     { id: "config", label: "Configuration" },
     { id: "custom", label: "Customisation" },
     { id: "cards", label: "Génération cartes" },
@@ -51,12 +50,6 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
         last_request: null,
         last_response: null,
         last_action: null,
-      };
-
-      this._enrich_state = {
-        running: false,
-        error: null,
-        last_result: null,
       };
 
       this._migration_state = {
@@ -109,7 +102,6 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
       // Otherwise <select> and other inputs close/reset while the user interacts.
       if (this._active_tab === "custom") return;
       if (this._active_tab === "config") return;
-      if (this._active_tab === "enrich") return;
 
       this._render();
     }
@@ -293,8 +285,8 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/diagnostic/diagnostic.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/diagnostic/diagnostic.view.js?v=${ASSET_V}`);
 
+        // Enrich API is still used (auto-create helpers after save), but tab is hidden.
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/enrich/enrich.api.js?v=${ASSET_V}`);
-        await window.hse_loader.load_script_once(`${PANEL_BASE}/features/enrich/enrich.view.js?v=${ASSET_V}`);
 
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/migration/migration.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/migration/migration.view.js?v=${ASSET_V}`);
@@ -332,8 +324,9 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
 
     _get_nav_items() {
       const from_shell = window.hse_shell?.get_nav_items?.();
-      if (Array.isArray(from_shell) && from_shell.length) return from_shell;
-      return NAV_ITEMS_FALLBACK;
+      const items = Array.isArray(from_shell) && from_shell.length ? from_shell : NAV_ITEMS_FALLBACK;
+      // Enrichissement is intentionally hidden (auto-run from Configuration save).
+      return items.filter((x) => x && x.id !== "enrich");
     }
 
     _ensure_valid_tab() {
@@ -406,9 +399,6 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
             return;
           case "scan":
             this._render_scan();
-            return;
-          case "enrich":
-            this._render_enrich().catch((err) => this._render_ui_error("Enrichissement", err));
             return;
           case "migration":
             this._render_migration().catch((err) => this._render_ui_error("Migration", err));
@@ -790,8 +780,10 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
             return;
           }
 
-          const ok = window.confirm("Sauvegarder ces tarifs (et la sélection de capteurs) ?");
+          const ok = window.confirm("Sauvegarder ces tarifs (et la sélection de capteurs) ?\nEnsuite HSE va créer automatiquement les helpers nécessaires.");
           if (!ok) return;
+
+          const ids_for_enrich = _cost_ids().slice();
 
           this._config_state.pricing_saving = true;
           this._config_state.pricing_error = null;
@@ -803,7 +795,29 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
             const pricingResp = await window.hse_config_api.fetch_pricing(this._hass);
             this._config_state.pricing_draft = null;
             _update_from_pricing(pricingResp);
-            this._config_state.pricing_message = "Tarifs sauvegardés.";
+
+            this._config_state.pricing_message = "Tarifs sauvegardés. Création des capteurs (helpers) en cours… (attends ~30s, ou redémarre HA si certains restent indisponibles).";
+            this._render();
+
+            if (window.hse_enrich_api?.apply) {
+              try {
+                const applied = await window.hse_enrich_api.apply(this._hass, { mode: "create_helpers", entity_ids: ids_for_enrich });
+                const sc = applied?.summary || {};
+                const created = sc.created_count ?? (Array.isArray(applied?.created) ? applied.created.length : 0);
+                const skipped = sc.skipped_count ?? (Array.isArray(applied?.skipped) ? applied.skipped.length : 0);
+                const errs = sc.errors_count ?? (Array.isArray(applied?.errors) ? applied.errors.length : 0);
+
+                if (errs > 0) {
+                  this._config_state.pricing_message = `Tarifs sauvegardés. Helpers: créés ${created}, ignorés ${skipped}, erreurs ${errs}. Si besoin, utilise l'onglet Migration pour un export YAML.`;
+                } else {
+                  this._config_state.pricing_message = `Tarifs sauvegardés. Helpers: créés ${created}, ignorés ${skipped}. (attends ~30s)`;
+                }
+              } catch (err) {
+                this._config_state.pricing_message = `Tarifs sauvegardés. Création auto des helpers en échec: ${this._err_msg(err)}. Utilise Migration pour exporter le YAML.`;
+              }
+            } else {
+              this._config_state.pricing_message = "Tarifs sauvegardés. Enrich API non disponible pour créer automatiquement les helpers (utilise Migration pour exporter le YAML).";
+            }
           } catch (err) {
             this._config_state.pricing_error = this._err_msg(err);
           } finally {
@@ -908,49 +922,6 @@ const build_signature = "2026-03-03_1159_fix_restore_full_render_with_migration"
             this._render();
           }
           return;
-        }
-      });
-    }
-
-    async _render_enrich() {
-      const container = this._ui.content;
-
-      if (!window.hse_enrich_view || !window.hse_enrich_api) {
-        this._render_placeholder("Enrichissement", "enrich.view.js non chargé.");
-        return;
-      }
-
-      const api = {
-        preview: (payload) => window.hse_enrich_api.preview(this._hass, payload),
-        apply: (payload) => window.hse_enrich_api.apply(this._hass, payload),
-      };
-
-      window.hse_enrich_view.render_enrich(container, this._enrich_state, async (action) => {
-        if (action !== "run") return;
-
-        this._enrich_state.running = true;
-        this._enrich_state.error = null;
-        this._enrich_state.last_result = null;
-        this._render();
-
-        try {
-          const preview = await api.preview({});
-          if (preview?.summary?.decisions_required_count > 0 || preview?.summary?.errors_count > 0) {
-            const ok = window.confirm(
-              `Décisions requises: ${preview?.summary?.decisions_required_count || 0} / Erreurs: ${preview?.summary?.errors_count || 0}. Ouvrir le détail ?`
-            );
-            this._enrich_state.last_result = preview;
-            if (!ok) return;
-            return;
-          }
-
-          const applied = await api.apply({});
-          this._enrich_state.last_result = { preview, applied };
-        } catch (err) {
-          this._enrich_state.error = this._err_msg(err);
-        } finally {
-          this._enrich_state.running = false;
-          this._render();
         }
       });
     }
