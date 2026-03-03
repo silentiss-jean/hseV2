@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from homeassistant.components.http import HomeAssistantView
+from homeassistant.helpers import entity_registry as er
 
 from ...const import API_PREFIX, DOMAIN
 from ...scan_engine import detect_kind
@@ -23,6 +24,7 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
       result: flow result (dict) if any
       used_data: dict (the data that succeeded)
       error: str
+      already_configured: bool
     """
 
     flow_mgr = getattr(getattr(hass, "config_entries", None), "flow", None)
@@ -48,8 +50,16 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
                         last_err = f"flow_configure_failed:{src}:{type(exc).__name__}:{exc}"
                         continue
 
-                if isinstance(res, dict) and res.get("type") in ("create_entry", "abort"):
-                    return {"ok": True, "result": res, "used_data": data}
+                if isinstance(res, dict) and res.get("type") == "create_entry":
+                    return {"ok": True, "result": res, "used_data": data, "already_configured": False}
+
+                if isinstance(res, dict) and res.get("type") == "abort":
+                    reason = res.get("reason") or "unknown"
+                    # Treat already_configured as a non-error outcome.
+                    if reason in ("already_configured", "single_instance_allowed"):
+                        return {"ok": True, "result": res, "used_data": data, "already_configured": True}
+                    last_err = f"flow_abort:{src}:{reason}"
+                    continue
 
                 last_err = f"flow_not_completed:{src}:{(res or {}).get('type') if isinstance(res, dict) else type(res).__name__}"
             except Exception as exc:  # noqa: BLE001
@@ -88,6 +98,8 @@ class EnrichApplyView(HomeAssistantView):
         skipped: list[dict] = []
         errors: list[dict] = []
         decisions_required: list[dict] = []
+
+        ent_reg = er.async_get(hass)
 
         bases = {}
         for eid in entity_ids:
@@ -137,7 +149,8 @@ class EnrichApplyView(HomeAssistantView):
                 total_eid = f"sensor.{total_name}"
 
                 # 1) Integration helper (power -> kWh total)
-                if hass.states.get(total_eid) is None:
+                reg_entry = ent_reg.async_get(total_eid)
+                if hass.states.get(total_eid) is None and reg_entry is None:
                     data_variants = [
                         {"source": power_eid, "name": total_name, "unit_prefix": "k", "round": 3, "method": "left"},
                         {"source_entity_id": power_eid, "name": total_name, "unit_prefix": "k", "round": 3, "method": "left"},
@@ -146,7 +159,10 @@ class EnrichApplyView(HomeAssistantView):
 
                     res = await _try_create_helper_via_flow(hass=hass, domain="integration", data_variants=data_variants)
                     if res.get("ok"):
-                        created.append({"entity_id": total_eid, "kind": "integration", "base": base, "flow": res.get("result")})
+                        if res.get("already_configured"):
+                            skipped.append({"entity_id": total_eid, "reason": "already_configured", "flow": res.get("result")})
+                        else:
+                            created.append({"entity_id": total_eid, "kind": "integration", "base": base, "flow": res.get("result")})
                         try:
                             await hass.async_block_till_done()
                         except Exception:  # noqa: BLE001
@@ -155,7 +171,7 @@ class EnrichApplyView(HomeAssistantView):
                         errors.append({"entity_id": total_eid, "kind": "integration", "base": base, "error": res.get("error")})
                         continue
                 else:
-                    skipped.append({"entity_id": total_eid, "reason": "already_exists"})
+                    skipped.append({"entity_id": total_eid, "reason": "already_exists_or_registered", "registry": bool(reg_entry)})
 
                 # 2) Utility meter helpers (day/week/month/year)
                 cycles = [
@@ -168,13 +184,13 @@ class EnrichApplyView(HomeAssistantView):
                 for suf, cycle in cycles:
                     meter_name = f"{base}_kwh_{suf}"
                     meter_eid = f"sensor.{meter_name}"
-                    if hass.states.get(meter_eid) is not None:
-                        skipped.append({"entity_id": meter_eid, "reason": "already_exists"})
+                    reg_meter = ent_reg.async_get(meter_eid)
+
+                    if hass.states.get(meter_eid) is not None or reg_meter is not None:
+                        skipped.append({"entity_id": meter_eid, "reason": "already_exists_or_registered", "registry": bool(reg_meter)})
                         continue
 
-                    # utility_meter config expects 'tariffs' to exist (can be empty)
                     base_payload = {"source": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []}
-
                     data_variants = [
                         base_payload,
                         {"source_sensor": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []},
@@ -184,7 +200,10 @@ class EnrichApplyView(HomeAssistantView):
 
                     res = await _try_create_helper_via_flow(hass=hass, domain="utility_meter", data_variants=data_variants)
                     if res.get("ok"):
-                        created.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "flow": res.get("result")})
+                        if res.get("already_configured"):
+                            skipped.append({"entity_id": meter_eid, "reason": "already_configured", "flow": res.get("result")})
+                        else:
+                            created.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "flow": res.get("result")})
                         try:
                             await hass.async_block_till_done()
                         except Exception:  # noqa: BLE001
