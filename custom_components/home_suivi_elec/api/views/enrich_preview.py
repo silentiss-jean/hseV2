@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 
 from homeassistant.components.http import HomeAssistantView
 
-from ...const import API_PREFIX
+from ...const import API_PREFIX, DOMAIN
+from ...scan_engine import detect_kind
 
 
 _SUFFIX_STRIP = (
@@ -58,44 +59,79 @@ class EnrichPreviewView(HomeAssistantView):
             return self.json({"error": "admin_required"}, status_code=403)
 
         body = await request.json() if request.can_read_body else {}
-        power_entity_id = (body or {}).get("power_entity_id") or "sensor.chambre_alex_pc_consommation_actuelle"
+        body = body or {}
+
+        # Default behavior: work on current pricing selection for a "one click" UX.
+        entity_ids = body.get("entity_ids")
+        if not isinstance(entity_ids, list) or not entity_ids:
+            cat = hass.data.get(DOMAIN, {}).get("catalogue") or {}
+            settings = cat.get("settings") if isinstance(cat, dict) else {}
+            pricing = settings.get("pricing") if isinstance(settings, dict) else {}
+            cids = pricing.get("cost_entity_ids") if isinstance(pricing, dict) else []
+            entity_ids = [x for x in cids if isinstance(x, str) and x]
 
         decisions_required: list[dict] = []
         errors: list[dict] = []
 
-        try:
-            base = derive_base_slug(power_entity_id)
-        except Exception as exc:  # noqa: BLE001
-            base = None
-            decisions_required.append(
-                {
-                    "code": "base_slug",
-                    "reason": str(exc),
-                    "power_entity_id": power_entity_id,
-                }
-            )
+        to_create: list[str] = []
+        already_ok: list[str] = []
 
-        to_create = []
-        if base:
-            to_create = [
-                f"sensor.{base}_kwh_total",
-                f"sensor.{base}_kwh_day",
-                f"sensor.{base}_kwh_week",
-                f"sensor.{base}_kwh_month",
-                f"sensor.{base}_kwh_year",
-            ]
+        per_source: list[dict] = []
+
+        for eid in entity_ids:
+            st = hass.states.get(eid)
+            attrs = st.attributes if st else {}
+            unit = (attrs or {}).get("unit_of_measurement")
+            device_class = (attrs or {}).get("device_class")
+            kind = detect_kind(device_class, unit)
+
+            if kind != "power":
+                decisions_required.append({"code": "not_power", "reason": "skip", "entity_id": eid, "kind": kind})
+                continue
+
+            try:
+                base = derive_base_slug(eid)
+            except Exception as exc:  # noqa: BLE001
+                base = None
+                decisions_required.append({"code": "base_slug", "reason": str(exc), "power_entity_id": eid})
+
+            expected = []
+            if base:
+                expected = [
+                    f"sensor.{base}_kwh_total",
+                    f"sensor.{base}_kwh_day",
+                    f"sensor.{base}_kwh_week",
+                    f"sensor.{base}_kwh_month",
+                    f"sensor.{base}_kwh_year",
+                ]
+
+            created_now = []
+            ok_now = []
+            for x in expected:
+                if hass.states.get(x) is not None:
+                    ok_now.append(x)
+                    if x not in already_ok:
+                        already_ok.append(x)
+                else:
+                    created_now.append(x)
+                    if x not in to_create:
+                        to_create.append(x)
+
+            per_source.append({"power_entity_id": eid, "base": base, "expected": expected, "already_ok": ok_now, "to_create": created_now})
 
         return self.json(
             {
                 "generated_at": datetime.now(timezone.utc).isoformat(),
-                "input": {"power_entity_id": power_entity_id},
+                "input": {"entity_ids": entity_ids},
                 "summary": {
                     "to_create_count": len(to_create),
-                    "already_ok_count": 0,
+                    "already_ok_count": len(already_ok),
                     "errors_count": len(errors),
                     "decisions_required_count": len(decisions_required),
                 },
+                "per_source": per_source,
                 "to_create": to_create,
+                "already_ok": already_ok,
                 "decisions_required": decisions_required,
                 "errors": errors,
             }

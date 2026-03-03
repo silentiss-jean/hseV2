@@ -14,6 +14,7 @@ from .views.enrich_apply import EnrichApplyView
 from .views.enrich_preview import EnrichPreviewView
 from .views.entities_scan import EntitiesScanView
 from .views.frontend_manifest import FrontendManifestView
+from .views.migration_export import MigrationExportView
 from .views.ping import PingView
 from .views.settings_pricing import SettingsPricingView
 
@@ -30,4 +31,5 @@ def async_register_unified_api(hass) -> None:
     hass.http.register_view(SettingsPricingView())
     hass.http.register_view(EnrichPreviewView())
     hass.http.register_view(EnrichApplyView())
+    hass.http.register_view(MigrationExportView())
     hass.http.register_view(DashboardOverviewView())
