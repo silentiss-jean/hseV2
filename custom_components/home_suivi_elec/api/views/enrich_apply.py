@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from homeassistant.components.http import HomeAssistantView
@@ -16,16 +17,39 @@ def _admin_only(request) -> bool:
     return bool(user and getattr(user, "is_admin", False))
 
 
-async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[dict]) -> dict:
-    """Best-effort helper creation via config flows.
+def _has_config_entry_named(hass, *, domain: str, name: str) -> bool:
+    try:
+        entries = hass.config_entries.async_entries(domain)
+    except Exception:  # noqa: BLE001
+        return False
 
-    Returns a dict with keys:
-      ok: bool
-      result: flow result (dict) if any
-      used_data: dict (the data that succeeded)
-      error: str
-      already_configured: bool
-    """
+    for e in entries or []:
+        try:
+            if (e.title or "") == name:
+                return True
+            opts = getattr(e, "options", None) or {}
+            if isinstance(opts, dict) and opts.get("name") == name:
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+
+    return False
+
+
+async def _wait_for_entity_or_registry(*, hass, ent_reg, entity_id: str, timeout_s: float = 5.0) -> bool:
+    end = hass.loop.time() + timeout_s
+    while hass.loop.time() < end:
+        if hass.states.get(entity_id) is not None:
+            return True
+        if ent_reg.async_get(entity_id) is not None:
+            return True
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.2)
+    return False
+
+
+async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[dict]) -> dict:
+    """Best-effort helper creation via config flows."""
 
     flow_mgr = getattr(getattr(hass, "config_entries", None), "flow", None)
     if flow_mgr is None:
@@ -151,10 +175,23 @@ class EnrichApplyView(HomeAssistantView):
                 # 1) Integration helper (power -> kWh total)
                 reg_entry = ent_reg.async_get(total_eid)
                 if hass.states.get(total_eid) is None and reg_entry is None:
+                    # Prevent creating duplicates if an entry exists but entities failed to set up.
+                    if _has_config_entry_named(hass, domain="integration", name=total_name):
+                        errors.append(
+                            {
+                                "entity_id": total_eid,
+                                "kind": "integration",
+                                "base": base,
+                                "error": "config_entry_exists_but_entity_missing",
+                            }
+                        )
+                        continue
+
+                    # Integral helper needs unit_time to build unit (kWh from W) on many HA versions.
                     data_variants = [
-                        {"source": power_eid, "name": total_name, "unit_prefix": "k", "round": 3, "method": "left"},
-                        {"source_entity_id": power_eid, "name": total_name, "unit_prefix": "k", "round": 3, "method": "left"},
-                        {"source_sensor": power_eid, "name": total_name, "unit_prefix": "k", "round": 3, "method": "left"},
+                        {"source": power_eid, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
+                        {"source_entity_id": power_eid, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
+                        {"source_sensor": power_eid, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
                     ]
 
                     res = await _try_create_helper_via_flow(hass=hass, domain="integration", data_variants=data_variants)
@@ -163,10 +200,11 @@ class EnrichApplyView(HomeAssistantView):
                             skipped.append({"entity_id": total_eid, "reason": "already_configured", "flow": res.get("result")})
                         else:
                             created.append({"entity_id": total_eid, "kind": "integration", "base": base, "flow": res.get("result")})
-                        try:
-                            await hass.async_block_till_done()
-                        except Exception:  # noqa: BLE001
-                            pass
+
+                        ok = await _wait_for_entity_or_registry(hass=hass, ent_reg=ent_reg, entity_id=total_eid, timeout_s=6.0)
+                        if not ok:
+                            errors.append({"entity_id": total_eid, "kind": "integration", "base": base, "error": "entity_not_created_after_flow"})
+                            continue
                     else:
                         errors.append({"entity_id": total_eid, "kind": "integration", "base": base, "error": res.get("error")})
                         continue
@@ -190,6 +228,10 @@ class EnrichApplyView(HomeAssistantView):
                         skipped.append({"entity_id": meter_eid, "reason": "already_exists_or_registered", "registry": bool(reg_meter)})
                         continue
 
+                    if _has_config_entry_named(hass, domain="utility_meter", name=meter_name):
+                        skipped.append({"entity_id": meter_eid, "reason": "config_entry_exists"})
+                        continue
+
                     base_payload = {"source": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []}
                     data_variants = [
                         base_payload,
@@ -204,10 +246,7 @@ class EnrichApplyView(HomeAssistantView):
                             skipped.append({"entity_id": meter_eid, "reason": "already_configured", "flow": res.get("result")})
                         else:
                             created.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "flow": res.get("result")})
-                        try:
-                            await hass.async_block_till_done()
-                        except Exception:  # noqa: BLE001
-                            pass
+                        await hass.async_block_till_done()
                     else:
                         errors.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "error": res.get("error")})
 
