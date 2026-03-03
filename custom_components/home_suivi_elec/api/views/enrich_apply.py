@@ -31,9 +31,10 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
 
     last_err = None
 
-    # Some built-in helpers (e.g. integration) don't support "import" source.
-    # Try "user" first, then fallback to "import" for flows that do support it.
-    sources = ("user", "import")
+    # Built-in helper config flows (integration, utility_meter) are meant to be created
+    # via the UI (source=user). Some of them do NOT support source=import, which triggers
+    # UnknownStep("... doesn't support step import").
+    sources = ("user",)
 
     for data in data_variants:
         for src in sources:
