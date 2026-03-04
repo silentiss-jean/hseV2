@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-03_1701_config_auto_enrich_and_hide_tab";
+const build_signature = "2026-03-04_1310_ui_wait_before_pricing_save";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.21";
+  const ASSET_V = "0.1.22";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -746,7 +746,7 @@ const build_signature = "2026-03-03_1701_config_auto_enrich_and_hide_tab";
 
           this._config_state.pricing_saving = true;
           this._config_state.pricing_error = null;
-          this._config_state.pricing_message = null;
+          this._config_state.pricing_message = "Suppression…";
           this._render();
 
           try {
@@ -780,14 +780,33 @@ const build_signature = "2026-03-03_1701_config_auto_enrich_and_hide_tab";
             return;
           }
 
+          // Set UI to waiting state BEFORE the blocking confirm(), so the user sees immediate feedback.
+          this._config_state.pricing_saving = true;
+          this._config_state.pricing_error = null;
+          this._config_state.pricing_message = "Sauvegarde en préparation…";
+          this._render();
+
+          // Give the browser one frame to paint the new state.
+          await new Promise((resolve) => {
+            try {
+              window.requestAnimationFrame(() => resolve());
+            } catch (_) {
+              window.setTimeout(resolve, 0);
+            }
+          });
+
           const ok = window.confirm("Sauvegarder ces tarifs (et la sélection de capteurs) ?\nEnsuite HSE va créer automatiquement les helpers nécessaires.");
-          if (!ok) return;
+          if (!ok) {
+            this._config_state.pricing_saving = false;
+            this._config_state.pricing_message = null;
+            this._render();
+            return;
+          }
 
           const ids_for_enrich = _cost_ids().slice();
 
-          this._config_state.pricing_saving = true;
           this._config_state.pricing_error = null;
-          this._config_state.pricing_message = null;
+          this._config_state.pricing_message = "Sauvegarde…";
           this._render();
 
           try {
