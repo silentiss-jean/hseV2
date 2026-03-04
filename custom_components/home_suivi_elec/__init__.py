@@ -22,7 +22,10 @@ from .const import (
     PANEL_JS_URL,
     CATALOGUE_REFRESH_INTERVAL_S,
     CATALOGUE_OFFLINE_GRACE_S,
+    META_SYNC_INTERVAL_S,
 )
+from .meta_store import async_load_meta, async_save_meta
+from .meta_sync import async_build_ha_snapshot, compute_pending_diff
 from .repairs import async_sync_repairs
 from .scan_engine import detect_kind, status_from_registry, utc_now_iso
 
@@ -58,6 +61,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_save_catalogue(hass, domain_data["catalogue"])
 
     domain_data["catalogue_save"] = _save_catalogue
+
+    # Meta (rooms/types/assignments)
+    domain_data["meta"] = await async_load_meta(hass)
+
+    async def _save_meta():
+        await async_save_meta(hass, domain_data["meta"])
+
+    domain_data["meta_save"] = _save_meta
+
+    async def _meta_sync_tick(*, force: bool = False, persist: bool = True):
+        if domain_data.get("meta_sync_running") and not force:
+            return {"skipped": True, "reason": "sync_running"}
+
+        domain_data["meta_sync_running"] = True
+        try:
+            snap = await async_build_ha_snapshot(hass)
+            diff = compute_pending_diff(domain_data["meta"], snap)
+
+            sync = domain_data["meta"].setdefault("sync", {})
+            sync["snapshot"] = snap
+            sync["pending_diff"] = diff if diff.get("has_changes") else None
+            sync["pending_generated_at"] = utc_now_iso() if diff.get("has_changes") else None
+            sync["last_run"] = utc_now_iso()
+            sync["last_error"] = None
+
+            domain_data["meta"]["generated_at"] = utc_now_iso()
+
+            if persist:
+                await async_save_meta(hass, domain_data["meta"])
+
+            return {"ok": True, "has_changes": bool(diff.get("has_changes")), "stats": diff.get("stats")}
+        except Exception as err:  # noqa: BLE001
+            sync = domain_data["meta"].setdefault("sync", {})
+            sync["last_error"] = str(err)
+            sync["last_run"] = utc_now_iso()
+            if persist:
+                await async_save_meta(hass, domain_data["meta"])
+            return {"ok": False, "error": str(err)}
+        finally:
+            domain_data["meta_sync_running"] = False
+
+    domain_data["meta_sync_tick"] = _meta_sync_tick
 
     async def _do_refresh(*, force: bool = False):
         if domain_data.get("catalogue_refresh_running") and not force:
@@ -173,6 +218,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data["catalogue_refresh"] = _do_refresh
 
     hass.async_create_task(_do_refresh(force=True))
+    hass.async_create_task(_meta_sync_tick(force=True, persist=True))
 
     async def _interval(_now):
         await _do_refresh(force=False)
@@ -181,6 +227,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         _interval,
         timedelta(seconds=CATALOGUE_REFRESH_INTERVAL_S),
+    )
+
+    async def _meta_interval(_now):
+        await _meta_sync_tick(force=False, persist=True)
+
+    domain_data["meta_unsub_interval"] = async_track_time_interval(
+        hass,
+        _meta_interval,
+        timedelta(seconds=META_SYNC_INTERVAL_S),
     )
 
     domain_data[entry.entry_id] = {}
@@ -194,6 +249,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unsub = domain_data.pop("catalogue_unsub_interval", None)
     if unsub:
         unsub()
+
+    unsub_meta = domain_data.pop("meta_unsub_interval", None)
+    if unsub_meta:
+        unsub_meta()
 
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return True

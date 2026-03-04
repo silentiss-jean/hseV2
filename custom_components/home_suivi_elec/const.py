@@ -15,3 +15,6 @@ CATALOGUE_REFRESH_INTERVAL_S = 600  # 10 minutes
 
 # Consider an entity degraded if it stays unavailable/unknown this long.
 CATALOGUE_OFFLINE_GRACE_S = 900  # 15 minutes
+
+# Meta (rooms/types) continuous sync interval
+META_SYNC_INTERVAL_S = 600  # 10 minutes
