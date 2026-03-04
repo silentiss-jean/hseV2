@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-04_1310_ui_wait_before_pricing_save";
+const build_signature = "2026-03-04_1545_fix_pricing_draft_init_race";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.22";
+  const ASSET_V = "0.1.23";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -516,7 +516,8 @@ const build_signature = "2026-03-04_1310_ui_wait_before_pricing_save";
           this._config_state.selected_reference_entity_id = cur;
         }
 
-        if (_remove_ref_from_cost()) {
+        // IMPORTANT: do not create pricing_draft from catalogue load (race with fetch_pricing on initial load)
+        if (this._config_state.pricing_draft && _remove_ref_from_cost()) {
           this._config_state.pricing_message = "Garde-fou: le capteur de référence a été retiré des capteurs de calcul.";
         }
       };
