@@ -507,7 +507,11 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       model.pricing_saving ? "Sauvegarde…" : "Sauvegarder tarifs (incl. capteurs)"
     );
     btnPricingSave.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
-    btnPricingSave.addEventListener("click", () => on_action("pricing_save"));
+    btnPricingSave.addEventListener("click", () => {
+      btnPricingSave.disabled = true;
+      btnPricingSave.textContent = "Sauvegarde…";
+      on_action("pricing_save");
+    });
 
     const btnPricingClear = el("button", "hse_button", "Effacer tarifs");
     btnPricingClear.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
@@ -851,7 +855,11 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
       model.pricing_saving ? "Sauvegarde…" : "Sauvegarder (tarifs + capteurs)"
     );
     btnSave2.disabled = !!model.loading || !!model.saving || !!model.pricing_saving;
-    btnSave2.addEventListener("click", () => on_action("pricing_save"));
+    btnSave2.addEventListener("click", () => {
+      btnSave2.disabled = true;
+      btnSave2.textContent = "Sauvegarde…";
+      on_action("pricing_save");
+    });
     costToolbar.appendChild(btnSave2);
     costCard.appendChild(costToolbar);
 
