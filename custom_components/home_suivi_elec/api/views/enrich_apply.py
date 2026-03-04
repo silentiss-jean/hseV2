@@ -232,12 +232,23 @@ class EnrichApplyView(HomeAssistantView):
                         skipped.append({"entity_id": meter_eid, "reason": "config_entry_exists"})
                         continue
 
-                    base_payload = {"source": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []}
+                    # Home Assistant 2026.2.x expects delta_values (and related options)
+                    # to exist in config_entry.options; missing keys can crash setup.
+                    base_payload = {
+                        "source": total_eid,
+                        "name": meter_name,
+                        "cycle": cycle,
+                        "tariffs": [],
+                        "delta_values": False,
+                        "net_consumption": False,
+                        "periodically_resetting": False,
+                        "always_available": False,
+                    }
                     data_variants = [
                         base_payload,
-                        {"source_sensor": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []},
-                        {"source_entity_id": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []},
-                        {"meter_id": meter_name, "source": total_eid, "name": meter_name, "cycle": cycle, "tariffs": []},
+                        {**base_payload, "source_sensor": total_eid},
+                        {**base_payload, "source_entity_id": total_eid},
+                        {**base_payload, "meter_id": meter_name},
                     ]
 
                     res = await _try_create_helper_via_flow(hass=hass, domain="utility_meter", data_variants=data_variants)
