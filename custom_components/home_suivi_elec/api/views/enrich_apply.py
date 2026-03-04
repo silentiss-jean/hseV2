@@ -362,12 +362,13 @@ class EnrichApplyView(HomeAssistantView):
                             skipped.append({"entity_id": meter_eid, "reason": "config_entry_exists"})
                             continue
 
-                    # Home Assistant 2026.2.x expects delta_values (and related options)
-                    # to exist in config_entry.options; missing keys can crash setup.
+                    # Home Assistant expects multiple keys to exist in config_entry.options
+                    # (missing keys can crash setup).
                     base_payload = {
                         "source": total_eid,
                         "name": meter_name,
                         "cycle": cycle,
+                        "offset": 0.0,
                         "tariffs": [],
                         "delta_values": False,
                         "net_consumption": False,
