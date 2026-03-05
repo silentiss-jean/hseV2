@@ -234,6 +234,7 @@ class EnrichApplyView(HomeAssistantView):
                             "hint": "Le capteur de puissance est unknown/unavailable. Attends une première mesure (allume une charge) puis relance.",
                         }
                     )
+                    continue
 
                 # 1) Integration helper (power -> kWh total)
                 reg_entry = ent_reg.async_get(total_eid)
