@@ -68,6 +68,28 @@ def _mk_empty_period_table() -> list[dict]:
     return [_mk_period_row(p) for p in ("hour", "day", "week", "month", "year")]
 
 
+def _meta_sync_summary(domain_data: dict) -> dict:
+    meta_store = domain_data.get("meta")
+    if not isinstance(meta_store, dict):
+        return {"ok": False, "pending": False, "stats": None, "last_run": None, "last_error": None, "pending_generated_at": None}
+
+    sync = meta_store.get("sync") if isinstance(meta_store.get("sync"), dict) else {}
+    pending = sync.get("pending_diff")
+
+    stats = None
+    if isinstance(pending, dict):
+        stats = pending.get("stats")
+
+    return {
+        "ok": True,
+        "pending": bool(isinstance(pending, dict) and pending.get("has_changes")),
+        "stats": stats if isinstance(stats, dict) else None,
+        "last_run": sync.get("last_run"),
+        "last_error": sync.get("last_error"),
+        "pending_generated_at": sync.get("pending_generated_at"),
+    }
+
+
 class DashboardOverviewView(HomeAssistantView):
     url = f"{API_PREFIX}/dashboard"
     name = "home_suivi_elec:unified:dashboard_overview"
@@ -76,7 +98,9 @@ class DashboardOverviewView(HomeAssistantView):
     async def get(self, request):
         hass = request.app["hass"]
 
-        catalogue = hass.data.get(DOMAIN, {}).get("catalogue")
+        domain_data = hass.data.get(DOMAIN, {})
+
+        catalogue = domain_data.get("catalogue")
         if not catalogue:
             catalogue = {"schema_version": 1, "generated_at": None, "items": {}, "settings": {}}
 
@@ -164,6 +188,8 @@ class DashboardOverviewView(HomeAssistantView):
         if selected and all((r.get("power_w") is None) for r in selected):
             warnings.append("selected_sensors_have_no_numeric_state")
 
+        meta_sync = _meta_sync_summary(domain_data)
+
         return self.json(
             {
                 "ok": True,
@@ -180,6 +206,7 @@ class DashboardOverviewView(HomeAssistantView):
                 "reference_table": reference_table,
                 "delta_table": delta_table,
                 "per_sensor_costs": per_sensor_costs,
+                "meta_sync": meta_sync,
                 "warnings": warnings,
             }
         )

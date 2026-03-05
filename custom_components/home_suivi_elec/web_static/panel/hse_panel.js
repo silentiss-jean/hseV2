@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-04_1545_fix_pricing_draft_init_race";
+const build_signature = "2026-03-05_1255_meta_sync_banner";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.23";
+  const ASSET_V = "0.1.24";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -31,6 +31,12 @@ const build_signature = "2026-03-04_1545_fix_pricing_draft_init_race";
       this._overview_data = null;
       this._overview_timer = null;
       this._overview_refreshing = false;
+
+      this._meta_timer = null;
+      this._meta_refreshing = false;
+      this._meta_store = null;
+      this._meta_error = null;
+      this._meta_message = null;
 
       this._scan_result = { integrations: [], candidates: [] };
       this._scan_state = {
@@ -93,6 +99,7 @@ const build_signature = "2026-03-04_1545_fix_pricing_draft_init_race";
 
     disconnectedCallback() {
       this._clear_overview_autorefresh();
+      this._clear_meta_autorefresh();
     }
 
     set hass(hass) {
@@ -248,6 +255,149 @@ const build_signature = "2026-03-04_1545_fix_pricing_draft_init_race";
       }
     }
 
+    _clear_meta_autorefresh() {
+      if (this._meta_timer) {
+        try {
+          window.clearInterval(this._meta_timer);
+        } catch (_) {}
+      }
+      this._meta_timer = null;
+      this._meta_refreshing = false;
+    }
+
+    _ensure_meta_autorefresh() {
+      if (this._meta_timer) return;
+
+      const tick = async () => {
+        if (!this._hass) return;
+        if (this._meta_refreshing) return;
+        this._meta_refreshing = true;
+
+        try {
+          const resp = await this._hass.callApi("get", "home_suivi_elec/unified/meta");
+          this._meta_store = resp?.meta_store || null;
+          this._meta_error = null;
+        } catch (err) {
+          this._meta_error = this._err_msg(err);
+        } finally {
+          this._meta_refreshing = false;
+
+          // IMPORTANT: avoid tearing down interactive controls on these tabs.
+          if (this._active_tab !== "custom" && this._active_tab !== "config") {
+            this._render();
+          }
+        }
+      };
+
+      this._meta_timer = window.setInterval(tick, 45000);
+
+      if (!this._meta_store && !this._meta_error) {
+        tick();
+      }
+    }
+
+    _render_meta_sync_banner(container) {
+      if (!window.hse_dom) return;
+
+      const { el } = window.hse_dom;
+
+      const meta_store = this._meta_store;
+      const sync = meta_store?.sync || null;
+      const pending = sync?.pending_diff || null;
+      const last_error = sync?.last_error || null;
+
+      const has_pending = !!(pending && pending.has_changes);
+      const has_error = !!last_error;
+
+      if (!has_pending && !has_error) return;
+
+      const stats = pending?.stats || null;
+      const c_rooms = stats?.create_rooms ?? 0;
+      const r_rooms = stats?.rename_rooms ?? 0;
+      const s_room = stats?.suggest_room ?? 0;
+
+      const card = el("div", "hse_card");
+
+      const title = has_error ? "Sync HA: erreur" : "Sync HA: changements proposés";
+      card.appendChild(el("div", null, title));
+
+      if (has_error) {
+        card.appendChild(el("pre", "hse_code", String(last_error)));
+      }
+
+      if (has_pending) {
+        const line = `Pièces: +${c_rooms}, renommages: ${r_rooms}, suggestions: ${s_room}`;
+        card.appendChild(el("div", "hse_subtitle", line));
+        if (sync?.pending_generated_at) {
+          card.appendChild(el("div", "hse_subtitle", `Généré: ${sync.pending_generated_at}`));
+        }
+      }
+
+      const toolbar = el("div", "hse_toolbar");
+
+      const btnRefresh = el("button", "hse_button", this._meta_refreshing ? "Rafraîchissement…" : "Rafraîchir sync");
+      btnRefresh.disabled = this._meta_refreshing;
+      btnRefresh.addEventListener("click", async () => {
+        if (!this._hass) return;
+
+        this._meta_refreshing = true;
+        this._meta_message = null;
+        this._render();
+
+        try {
+          const resp = await this._hass.callApi("post", "home_suivi_elec/unified/meta/sync/preview", { persist: true });
+          this._meta_store = resp?.meta_store || this._meta_store;
+          this._meta_error = null;
+          this._meta_message = "Propositions mises à jour.";
+        } catch (err) {
+          this._meta_error = this._err_msg(err);
+        } finally {
+          this._meta_refreshing = false;
+          if (this._active_tab !== "custom" && this._active_tab !== "config") this._render();
+        }
+      });
+
+      const btnApply = el("button", "hse_button hse_button_primary", "Valider (auto)");
+      btnApply.disabled = !has_pending || this._meta_refreshing;
+      btnApply.addEventListener("click", async () => {
+        if (!this._hass) return;
+        if (!has_pending) return;
+
+        const ok = window.confirm("Appliquer les changements proposés (mode auto) ?\nAucun champ manuel ne sera écrasé.");
+        if (!ok) return;
+
+        this._meta_refreshing = true;
+        this._meta_message = null;
+        if (this._active_tab !== "custom" && this._active_tab !== "config") this._render();
+
+        try {
+          const resp = await this._hass.callApi("post", "home_suivi_elec/unified/meta/sync/apply", { apply_mode: "auto" });
+          this._meta_store = resp?.meta_store || this._meta_store;
+          this._meta_error = null;
+          this._meta_message = "Changements appliqués.";
+        } catch (err) {
+          this._meta_error = this._err_msg(err);
+        } finally {
+          this._meta_refreshing = false;
+          if (this._active_tab !== "custom" && this._active_tab !== "config") this._render();
+        }
+      });
+
+      const btnGo = el("button", "hse_button", "Ouvrir Customisation");
+      btnGo.addEventListener("click", () => this._set_active_tab("custom"));
+
+      toolbar.appendChild(btnRefresh);
+      toolbar.appendChild(btnApply);
+      toolbar.appendChild(btnGo);
+
+      if (this._meta_message) {
+        toolbar.appendChild(el("div", "hse_subtitle", this._meta_message));
+      }
+
+      card.appendChild(toolbar);
+      container.appendChild(card);
+    }
+
     async _boot() {
       if (this._boot_done) return;
 
@@ -379,6 +529,10 @@ const build_signature = "2026-03-04_1545_fix_pricing_draft_init_race";
       this._render_nav_tabs();
 
       window.hse_dom.clear(this._ui.content);
+
+      // Keep meta sync banner up-to-date for all tabs (no automatic apply).
+      this._ensure_meta_autorefresh();
+      this._render_meta_sync_banner(this._ui.content);
 
       if (!this._hass) {
         this._ui.content.appendChild(window.hse_dom.el("div", "hse_card", "En attente de hass…"));
