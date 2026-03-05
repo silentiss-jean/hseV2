@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-05_1255_meta_sync_banner";
+const build_signature = "2026-03-05_1518_custom_sync_ui";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.24";
+  const ASSET_V = "0.1.25";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -31,12 +31,6 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
       this._overview_data = null;
       this._overview_timer = null;
       this._overview_refreshing = false;
-
-      this._meta_timer = null;
-      this._meta_refreshing = false;
-      this._meta_store = null;
-      this._meta_error = null;
-      this._meta_message = null;
 
       this._scan_result = { integrations: [], candidates: [] };
       this._scan_state = {
@@ -94,12 +88,21 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
         glass: false,
       };
 
+      this._org_state = {
+        loading: false,
+        error: null,
+        message: null,
+        meta_store: null,
+        preview_running: false,
+        apply_running: false,
+        show_raw: false,
+      };
+
       this._render_raf_scheduled = false;
     }
 
     disconnectedCallback() {
       this._clear_overview_autorefresh();
-      this._clear_meta_autorefresh();
     }
 
     set hass(hass) {
@@ -255,147 +258,79 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
       }
     }
 
-    _clear_meta_autorefresh() {
-      if (this._meta_timer) {
-        try {
-          window.clearInterval(this._meta_timer);
-        } catch (_) {}
-      }
-      this._meta_timer = null;
-      this._meta_refreshing = false;
-    }
+    async _org_fetch_meta() {
+      if (!this._hass) return;
+      if (this._org_state.loading) return;
 
-    _ensure_meta_autorefresh() {
-      if (this._meta_timer) return;
+      this._org_state.loading = true;
+      this._org_state.error = null;
+      this._org_state.message = null;
+      this._render();
 
-      const tick = async () => {
-        if (!this._hass) return;
-        if (this._meta_refreshing) return;
-        this._meta_refreshing = true;
-
-        try {
-          const resp = await this._hass.callApi("get", "home_suivi_elec/unified/meta");
-          this._meta_store = resp?.meta_store || null;
-          this._meta_error = null;
-        } catch (err) {
-          this._meta_error = this._err_msg(err);
-        } finally {
-          this._meta_refreshing = false;
-
-          // IMPORTANT: avoid tearing down interactive controls on these tabs.
-          if (this._active_tab !== "custom" && this._active_tab !== "config") {
-            this._render();
-          }
-        }
-      };
-
-      this._meta_timer = window.setInterval(tick, 45000);
-
-      if (!this._meta_store && !this._meta_error) {
-        tick();
-      }
-    }
-
-    _render_meta_sync_banner(container) {
-      if (!window.hse_dom) return;
-
-      const { el } = window.hse_dom;
-
-      const meta_store = this._meta_store;
-      const sync = meta_store?.sync || null;
-      const pending = sync?.pending_diff || null;
-      const last_error = sync?.last_error || null;
-
-      const has_pending = !!(pending && pending.has_changes);
-      const has_error = !!last_error;
-
-      if (!has_pending && !has_error) return;
-
-      const stats = pending?.stats || null;
-      const c_rooms = stats?.create_rooms ?? 0;
-      const r_rooms = stats?.rename_rooms ?? 0;
-      const s_room = stats?.suggest_room ?? 0;
-
-      const card = el("div", "hse_card");
-
-      const title = has_error ? "Sync HA: erreur" : "Sync HA: changements proposés";
-      card.appendChild(el("div", null, title));
-
-      if (has_error) {
-        card.appendChild(el("pre", "hse_code", String(last_error)));
-      }
-
-      if (has_pending) {
-        const line = `Pièces: +${c_rooms}, renommages: ${r_rooms}, suggestions: ${s_room}`;
-        card.appendChild(el("div", "hse_subtitle", line));
-        if (sync?.pending_generated_at) {
-          card.appendChild(el("div", "hse_subtitle", `Généré: ${sync.pending_generated_at}`));
-        }
-      }
-
-      const toolbar = el("div", "hse_toolbar");
-
-      const btnRefresh = el("button", "hse_button", this._meta_refreshing ? "Rafraîchissement…" : "Rafraîchir sync");
-      btnRefresh.disabled = this._meta_refreshing;
-      btnRefresh.addEventListener("click", async () => {
-        if (!this._hass) return;
-
-        this._meta_refreshing = true;
-        this._meta_message = null;
+      try {
+        const resp = await this._hass.callApi("get", "home_suivi_elec/unified/meta");
+        this._org_state.meta_store = resp?.meta_store || null;
+        this._org_state.error = null;
+      } catch (err) {
+        this._org_state.error = this._err_msg(err);
+      } finally {
+        this._org_state.loading = false;
         this._render();
-
-        try {
-          const resp = await this._hass.callApi("post", "home_suivi_elec/unified/meta/sync/preview", { persist: true });
-          this._meta_store = resp?.meta_store || this._meta_store;
-          this._meta_error = null;
-          this._meta_message = "Propositions mises à jour.";
-        } catch (err) {
-          this._meta_error = this._err_msg(err);
-        } finally {
-          this._meta_refreshing = false;
-          if (this._active_tab !== "custom" && this._active_tab !== "config") this._render();
-        }
-      });
-
-      const btnApply = el("button", "hse_button hse_button_primary", "Valider (auto)");
-      btnApply.disabled = !has_pending || this._meta_refreshing;
-      btnApply.addEventListener("click", async () => {
-        if (!this._hass) return;
-        if (!has_pending) return;
-
-        const ok = window.confirm("Appliquer les changements proposés (mode auto) ?\nAucun champ manuel ne sera écrasé.");
-        if (!ok) return;
-
-        this._meta_refreshing = true;
-        this._meta_message = null;
-        if (this._active_tab !== "custom" && this._active_tab !== "config") this._render();
-
-        try {
-          const resp = await this._hass.callApi("post", "home_suivi_elec/unified/meta/sync/apply", { apply_mode: "auto" });
-          this._meta_store = resp?.meta_store || this._meta_store;
-          this._meta_error = null;
-          this._meta_message = "Changements appliqués.";
-        } catch (err) {
-          this._meta_error = this._err_msg(err);
-        } finally {
-          this._meta_refreshing = false;
-          if (this._active_tab !== "custom" && this._active_tab !== "config") this._render();
-        }
-      });
-
-      const btnGo = el("button", "hse_button", "Ouvrir Customisation");
-      btnGo.addEventListener("click", () => this._set_active_tab("custom"));
-
-      toolbar.appendChild(btnRefresh);
-      toolbar.appendChild(btnApply);
-      toolbar.appendChild(btnGo);
-
-      if (this._meta_message) {
-        toolbar.appendChild(el("div", "hse_subtitle", this._meta_message));
       }
+    }
 
-      card.appendChild(toolbar);
-      container.appendChild(card);
+    async _org_preview() {
+      if (!this._hass) return;
+      if (this._org_state.preview_running || this._org_state.loading) return;
+
+      this._org_state.preview_running = true;
+      this._org_state.error = null;
+      this._org_state.message = null;
+      this._render();
+
+      try {
+        const resp = await this._hass.callApi("post", "home_suivi_elec/unified/meta/sync/preview", { persist: true });
+        this._org_state.meta_store = resp?.meta_store || this._org_state.meta_store;
+        this._org_state.error = null;
+        this._org_state.message = "Propositions mises à jour.";
+      } catch (err) {
+        this._org_state.error = this._err_msg(err);
+      } finally {
+        this._org_state.preview_running = false;
+        this._render();
+      }
+    }
+
+    async _org_apply(apply_mode) {
+      if (!this._hass) return;
+      if (this._org_state.apply_running || this._org_state.loading || this._org_state.preview_running) return;
+
+      const mode = apply_mode === "all" ? "all" : "auto";
+
+      const msg =
+        mode === "all"
+          ? "Appliquer les changements proposés (mode ALL) ?\nCe mode peut écraser des choix manuels."
+          : "Appliquer les changements proposés (mode auto) ?\nAucun champ manuel ne sera écrasé.";
+
+      const ok = window.confirm(msg);
+      if (!ok) return;
+
+      this._org_state.apply_running = true;
+      this._org_state.error = null;
+      this._org_state.message = null;
+      this._render();
+
+      try {
+        const resp = await this._hass.callApi("post", "home_suivi_elec/unified/meta/sync/apply", { apply_mode: mode });
+        this._org_state.meta_store = resp?.meta_store || this._org_state.meta_store;
+        this._org_state.error = null;
+        this._org_state.message = "Changements appliqués.";
+      } catch (err) {
+        this._org_state.error = this._err_msg(err);
+      } finally {
+        this._org_state.apply_running = false;
+        this._render();
+      }
     }
 
     async _boot() {
@@ -530,10 +465,6 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
 
       window.hse_dom.clear(this._ui.content);
 
-      // Keep meta sync banner up-to-date for all tabs (no automatic apply).
-      this._ensure_meta_autorefresh();
-      this._render_meta_sync_banner(this._ui.content);
-
       if (!this._hass) {
         this._ui.content.appendChild(window.hse_dom.el("div", "hse_card", "En attente de hass…"));
         return;
@@ -561,7 +492,7 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
             this._render_config().catch((err) => this._render_ui_error("Configuration", err));
             return;
           case "custom":
-            this._render_custom();
+            this._render_custom().catch((err) => this._render_ui_error("Customisation", err));
             return;
           default:
             this._render_placeholder("Page", "À venir.");
@@ -1160,12 +1091,17 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
         const dd = new Date();
         dd.setDate(dd.getDate() + days);
         const pad = (n) => String(n).padStart(2, "0");
-        const yyyy = dd.getFullYear(), mm = pad(dd.getMonth() + 1), da = pad(dd.getDate());
-        const hh = pad(dd.getHours()), mi = pad(dd.getMinutes()), ss = pad(dd.getSeconds());
+        const yyyy = dd.getFullYear(),
+          mm = pad(dd.getMonth() + 1),
+          da = pad(dd.getDate());
+        const hh = pad(dd.getHours()),
+          mi = pad(dd.getMinutes()),
+          ss = pad(dd.getSeconds());
         const tzMin = -dd.getTimezoneOffset();
         const sign = tzMin >= 0 ? "+" : "-";
         const tzAbs = Math.abs(tzMin);
-        const tzh = pad(Math.floor(tzAbs / 60)), tzm = pad(tzAbs % 60);
+        const tzh = pad(Math.floor(tzAbs / 60)),
+          tzm = pad(tzAbs % 60);
         return `${yyyy}-${mm}-${da}T${hh}:${mi}:${ss}${sign}${tzh}:${tzm}`;
       };
 
@@ -1270,7 +1206,7 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
       });
     }
 
-    _render_custom() {
+    async _render_custom() {
       const container = this._ui.content;
 
       if (!window.hse_custom_view?.render_customisation) {
@@ -1278,7 +1214,11 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
         return;
       }
 
-      window.hse_custom_view.render_customisation(container, this._custom_state, (action, value) => {
+      if (!this._org_state.meta_store && !this._org_state.loading && !this._org_state.error) {
+        this._org_fetch_meta();
+      }
+
+      window.hse_custom_view.render_customisation(container, this._custom_state, this._org_state, (action, value) => {
         if (action === "set_theme") {
           this._set_theme(value || "ha");
           return;
@@ -1296,6 +1236,27 @@ const build_signature = "2026-03-05_1255_meta_sync_banner";
           this._custom_state.glass = !this._custom_state.glass;
           this._storage_set("hse_custom_glass", this._custom_state.glass ? "1" : "0");
           this._apply_glass_override();
+          this._render();
+          return;
+        }
+
+        if (action === "org_refresh") {
+          this._org_fetch_meta();
+          return;
+        }
+
+        if (action === "org_preview") {
+          this._org_preview();
+          return;
+        }
+
+        if (action === "org_apply") {
+          this._org_apply(value?.apply_mode || "auto");
+          return;
+        }
+
+        if (action === "org_toggle_raw") {
+          this._org_state.show_raw = !this._org_state.show_raw;
           this._render();
           return;
         }
