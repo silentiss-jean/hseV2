@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-05_1518_custom_sync_ui";
+const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.25";
+  const ASSET_V = "0.1.26";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -90,12 +90,17 @@ const build_signature = "2026-03-05_1518_custom_sync_ui";
 
       this._org_state = {
         loading: false,
+        saving: false,
+        dirty: false,
         error: null,
         message: null,
         meta_store: null,
+        meta_draft: null,
         preview_running: false,
         apply_running: false,
         show_raw: false,
+        rooms_filter_q: "",
+        assignments_filter_q: "",
       };
 
       this._render_raf_scheduled = false;
@@ -209,6 +214,19 @@ const build_signature = "2026-03-05_1518_custom_sync_ui";
       }
     }
 
+    _deep_set(obj, path, v) {
+      if (!obj || typeof obj !== "object") return;
+      const parts = String(path || "").split(".").filter(Boolean);
+      if (!parts.length) return;
+      let cur = obj;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const k = parts[i];
+        if (!cur[k] || typeof cur[k] !== "object") cur[k] = {};
+        cur = cur[k];
+      }
+      cur[parts[parts.length - 1]] = v;
+    }
+
     _render_ui_error(title, err) {
       try {
         console.error(`[HSE] UI error in ${title}`, err);
@@ -258,6 +276,44 @@ const build_signature = "2026-03-05_1518_custom_sync_ui";
       }
     }
 
+    _org_ensure_draft() {
+      if (this._org_state.meta_draft) return;
+
+      const m = this._org_state.meta_store?.meta || null;
+      if (m) {
+        try {
+          this._org_state.meta_draft = JSON.parse(JSON.stringify(m));
+        } catch (_) {
+          this._org_state.meta_draft = m;
+        }
+      } else {
+        this._org_state.meta_draft = { rooms: {}, types: {}, assignments: {} };
+      }
+
+      if (!this._org_state.meta_draft.rooms) this._org_state.meta_draft.rooms = {};
+      if (!this._org_state.meta_draft.types) this._org_state.meta_draft.types = {};
+      if (!this._org_state.meta_draft.assignments) this._org_state.meta_draft.assignments = {};
+    }
+
+    _org_reset_draft_from_store() {
+      const m = this._org_state.meta_store?.meta || null;
+      if (!m) {
+        this._org_state.meta_draft = { rooms: {}, types: {}, assignments: {} };
+      } else {
+        try {
+          this._org_state.meta_draft = JSON.parse(JSON.stringify(m));
+        } catch (_) {
+          this._org_state.meta_draft = m;
+        }
+      }
+
+      if (!this._org_state.meta_draft.rooms) this._org_state.meta_draft.rooms = {};
+      if (!this._org_state.meta_draft.types) this._org_state.meta_draft.types = {};
+      if (!this._org_state.meta_draft.assignments) this._org_state.meta_draft.assignments = {};
+
+      this._org_state.dirty = false;
+    }
+
     async _org_fetch_meta() {
       if (!this._hass) return;
       if (this._org_state.loading) return;
@@ -271,10 +327,53 @@ const build_signature = "2026-03-05_1518_custom_sync_ui";
         const resp = await this._hass.callApi("get", "home_suivi_elec/unified/meta");
         this._org_state.meta_store = resp?.meta_store || null;
         this._org_state.error = null;
+
+        // Only refresh draft automatically when the user has not edited it.
+        if (!this._org_state.dirty) {
+          this._org_reset_draft_from_store();
+        } else {
+          this._org_ensure_draft();
+        }
       } catch (err) {
         this._org_state.error = this._err_msg(err);
       } finally {
         this._org_state.loading = false;
+        this._render();
+      }
+    }
+
+    async _org_save_meta() {
+      if (!this._hass) return;
+      if (this._org_state.saving || this._org_state.loading || this._org_state.preview_running || this._org_state.apply_running) return;
+
+      this._org_ensure_draft();
+
+      const ok = window.confirm("Sauvegarder l'organisation (meta: rooms/types/assignments) ?");
+      if (!ok) return;
+
+      this._org_state.saving = true;
+      this._org_state.error = null;
+      this._org_state.message = "Sauvegarde…";
+      this._render();
+
+      try {
+        const resp = await this._hass.callApi("post", "home_suivi_elec/unified/meta", {
+          meta: this._org_state.meta_draft,
+        });
+
+        this._org_state.meta_store = resp?.meta_store || this._org_state.meta_store;
+        this._org_state.message = "Organisation sauvegardée.";
+        this._org_state.error = null;
+        this._org_state.dirty = false;
+
+        if (!this._org_state.dirty) {
+          this._org_reset_draft_from_store();
+        }
+      } catch (err) {
+        this._org_state.error = this._err_msg(err);
+        this._org_state.message = "Échec de sauvegarde.";
+      } finally {
+        this._org_state.saving = false;
         this._render();
       }
     }
@@ -293,6 +392,12 @@ const build_signature = "2026-03-05_1518_custom_sync_ui";
         this._org_state.meta_store = resp?.meta_store || this._org_state.meta_store;
         this._org_state.error = null;
         this._org_state.message = "Propositions mises à jour.";
+
+        if (!this._org_state.dirty) {
+          this._org_reset_draft_from_store();
+        } else {
+          this._org_ensure_draft();
+        }
       } catch (err) {
         this._org_state.error = this._err_msg(err);
       } finally {
@@ -325,6 +430,12 @@ const build_signature = "2026-03-05_1518_custom_sync_ui";
         this._org_state.meta_store = resp?.meta_store || this._org_state.meta_store;
         this._org_state.error = null;
         this._org_state.message = "Changements appliqués.";
+
+        if (!this._org_state.dirty) {
+          this._org_reset_draft_from_store();
+        } else {
+          this._org_ensure_draft();
+        }
       } catch (err) {
         this._org_state.error = this._err_msg(err);
       } finally {
@@ -1252,6 +1363,119 @@ const build_signature = "2026-03-05_1518_custom_sync_ui";
 
         if (action === "org_apply") {
           this._org_apply(value?.apply_mode || "auto");
+          return;
+        }
+
+        if (action === "org_save") {
+          this._org_save_meta();
+          return;
+        }
+
+        if (action === "org_draft_reset") {
+          const ok = window.confirm("Réinitialiser le brouillon (perdre les modifications locales non sauvegardées) ?");
+          if (!ok) return;
+          this._org_reset_draft_from_store();
+          this._render();
+          return;
+        }
+
+        if (action === "org_patch") {
+          const path = value?.path;
+          const v = value?.value;
+          const no_render = value?.no_render === true;
+
+          this._org_ensure_draft();
+          this._deep_set(this._org_state.meta_draft, path, v);
+          this._org_state.dirty = true;
+
+          if (!no_render) this._render();
+          return;
+        }
+
+        if (action === "org_room_add") {
+          const room_id = value?.room_id;
+          const name = value?.name;
+          if (!room_id) return;
+
+          this._org_ensure_draft();
+          const rooms = this._org_state.meta_draft.rooms;
+          if (rooms[room_id]) {
+            this._org_state.message = `Room existe déjà: ${room_id}`;
+            this._render();
+            return;
+          }
+
+          rooms[room_id] = {
+            name: name || room_id,
+            mode: "mixed",
+            name_mode: "mixed",
+            ha_area_id: null,
+          };
+
+          this._org_state.dirty = true;
+          this._org_state.message = `Room ajoutée: ${room_id}`;
+          this._render();
+          return;
+        }
+
+        if (action === "org_room_delete") {
+          const room_id = value?.room_id;
+          if (!room_id) return;
+
+          this._org_ensure_draft();
+          delete this._org_state.meta_draft.rooms[room_id];
+          this._org_state.dirty = true;
+          this._org_state.message = `Room supprimée: ${room_id}`;
+          this._render();
+          return;
+        }
+
+        if (action === "org_assignment_add") {
+          const entity_id = value?.entity_id;
+          if (!entity_id) return;
+
+          this._org_ensure_draft();
+          const asg = this._org_state.meta_draft.assignments;
+          if (asg[entity_id]) {
+            this._org_state.message = `Assignment existe déjà: ${entity_id}`;
+            this._render();
+            return;
+          }
+
+          asg[entity_id] = {
+            room_id: null,
+            room_mode: "mixed",
+            type_id: null,
+            type_mode: "mixed",
+          };
+
+          this._org_state.dirty = true;
+          this._org_state.message = `Assignment ajoutée: ${entity_id}`;
+          this._render();
+          return;
+        }
+
+        if (action === "org_assignment_delete") {
+          const entity_id = value?.entity_id;
+          if (!entity_id) return;
+
+          this._org_ensure_draft();
+          delete this._org_state.meta_draft.assignments[entity_id];
+          this._org_state.dirty = true;
+          this._org_state.message = `Assignment supprimée: ${entity_id}`;
+          this._render();
+          return;
+        }
+
+        if (action === "org_filter_rooms") {
+          this._org_state.rooms_filter_q = String(value || "");
+          this._render();
+          return;
+        }
+
+        if (action === "org_filter_assignments") {
+          this._org_state.assignments_filter_q = String(value || "");
+          this._render();
           return;
         }
 
