@@ -25,10 +25,46 @@ def _as_dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _rooms_iter(rooms_in: Any) -> list[dict[str, Any]]:
+    """Accept rooms as list[{id,...}] OR dict[id -> {..}] and return a list."""
+    if isinstance(rooms_in, list):
+        return rooms_in
+    if isinstance(rooms_in, dict):
+        out: list[dict[str, Any]] = []
+        for rid, v in rooms_in.items():
+            if not isinstance(v, dict):
+                raise ValueError("rooms:invalid")
+            cur = dict(v)
+            if "id" in cur and cur.get("id") != rid:
+                raise ValueError("rooms.id:mismatch")
+            cur.setdefault("id", rid)
+            out.append(cur)
+        return out
+    return []
+
+
+def _types_iter(types_in: Any) -> list[dict[str, Any]]:
+    """Accept types as list[{id,...}] OR dict[id -> {..}] and return a list."""
+    if isinstance(types_in, list):
+        return types_in
+    if isinstance(types_in, dict):
+        out: list[dict[str, Any]] = []
+        for tid, v in types_in.items():
+            if not isinstance(v, dict):
+                raise ValueError("types:invalid")
+            cur = dict(v)
+            if "id" in cur and cur.get("id") != tid:
+                raise ValueError("types.id:mismatch")
+            cur.setdefault("id", tid)
+            out.append(cur)
+        return out
+    return []
+
+
 def _validate_rooms(rooms_in: Any) -> list[dict[str, Any]]:
-    rooms = []
+    rooms: list[dict[str, Any]] = []
     seen = set()
-    for r in _as_list(rooms_in):
+    for r in _rooms_iter(rooms_in):
         if not isinstance(r, dict):
             raise ValueError("rooms:invalid")
         rid = r.get("id")
@@ -53,9 +89,9 @@ def _validate_rooms(rooms_in: Any) -> list[dict[str, Any]]:
 
 
 def _validate_types(types_in: Any) -> list[dict[str, Any]]:
-    types = []
+    types: list[dict[str, Any]] = []
     seen = set()
-    for t in _as_list(types_in):
+    for t in _types_iter(types_in):
         if not isinstance(t, dict):
             raise ValueError("types:invalid")
         tid = t.get("id")
