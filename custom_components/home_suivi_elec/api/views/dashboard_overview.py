@@ -40,7 +40,21 @@ def _power_w_from_state(st) -> float | None:
     return v
 
 
-def _current_reference_entity_id(catalogue: dict) -> str | None:
+def _catalogue_item_by_source_entity_id(catalogue: dict, entity_id: str) -> dict | None:
+    items = (catalogue or {}).get("items") or {}
+    if not isinstance(items, dict):
+        return None
+    for item in items.values():
+        if not isinstance(item, dict):
+            continue
+        src = item.get("source") or {}
+        current_entity_id = src.get("entity_id") if isinstance(src, dict) else None
+        if current_entity_id == entity_id:
+            return item
+    return None
+
+
+def _current_reference_item(catalogue: dict) -> dict | None:
     items = (catalogue or {}).get("items") or {}
     if not isinstance(items, dict):
         return None
@@ -49,11 +63,19 @@ def _current_reference_entity_id(catalogue: dict) -> str | None:
             continue
         enr = it.get("enrichment") or {}
         if isinstance(enr, dict) and enr.get("is_reference_total") is True:
-            src = it.get("source") or {}
-            if isinstance(src, dict):
-                eid = src.get("entity_id")
-                if isinstance(eid, str) and eid:
-                    return eid
+            return it
+    return None
+
+
+def _current_reference_entity_id(catalogue: dict) -> str | None:
+    item = _current_reference_item(catalogue)
+    if not isinstance(item, dict):
+        return None
+    src = item.get("source") or {}
+    if isinstance(src, dict):
+        eid = src.get("entity_id")
+        if isinstance(eid, str) and eid:
+            return eid
     return None
 
 
@@ -239,6 +261,7 @@ class DashboardOverviewView(HomeAssistantView):
 
         total_w = sum(float(r.get("power_w") or 0.0) for r in selected)
 
+        ref_item = _current_reference_item(catalogue)
         ref_eid = _current_reference_entity_id(catalogue)
         reference = None
         delta = None
@@ -259,7 +282,10 @@ class DashboardOverviewView(HomeAssistantView):
         else:
             warnings.append("no_reference_configured")
 
-        sensor_snapshots = [build_sensor_cost_snapshot(hass, pricing, eid) for eid in cost_ids]
+        sensor_snapshots = [
+            build_sensor_cost_snapshot(hass, pricing, _catalogue_item_by_source_entity_id(catalogue, eid) or eid)
+            for eid in cost_ids
+        ]
         aggregate = aggregate_sensor_cost_snapshots(sensor_snapshots)
 
         for snap in sensor_snapshots:
@@ -269,7 +295,7 @@ class DashboardOverviewView(HomeAssistantView):
         reference_snapshot = None
         reference_aggregate: dict[str, dict[str, float | None]] = {}
         if ref_eid:
-            reference_snapshot = build_sensor_cost_snapshot(hass, pricing, ref_eid)
+            reference_snapshot = build_sensor_cost_snapshot(hass, pricing, ref_item or ref_eid)
             reference_aggregate = aggregate_sensor_cost_snapshots([reference_snapshot])
             for warning in reference_snapshot.get("warnings") or []:
                 warnings.append(f"reference:{ref_eid}:{warning}")
