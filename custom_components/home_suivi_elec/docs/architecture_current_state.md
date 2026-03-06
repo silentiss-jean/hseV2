@@ -66,18 +66,45 @@ Le bloc `meta` constitue un second store partagé, distinct du catalogue. Il ser
 
 Le store `meta` joue déjà le rôle d’une **couche d’interprétation** entre Home Assistant brut et la représentation métier utilisée par l’UI.
 
-## 4) Implication pour l’unification
+## 4) Pricing : rôle actuel
+
+La configuration tarifaire est aujourd’hui portée par l’API `settings/pricing` et stockée dans le catalogue persistant sous `catalogue["settings"]["pricing"]`.
+
+### Modèle actuel observé
+
+Le backend stocke explicitement :
+
+- `contract_type` : `fixed` ou `hphc` ;
+- `display_mode` : `ttc` ou `ht` ;
+- `subscription_monthly` : paire `{ht, ttc}` ;
+- `cost_entity_ids` : liste des entités sélectionnées pour le calcul ;
+- selon le contrat, soit `fixed_energy_per_kwh`, soit `hp_energy_per_kwh` + `hc_energy_per_kwh` + `hc_schedule` ;
+- `updated_at`.
+
+### Règles déjà en place
+
+- Le backend ne déduit pas la TVA : il exige des valeurs HT et TTC explicites.
+- Les `entity_id` sélectionnés sont validés syntaxiquement.
+- Le capteur de référence total ne peut pas faire partie de `cost_entity_ids`.
+- Des valeurs par défaut existent déjà pour aider l’UI à préremplir un contrat cohérent.
+
+### Lecture fonctionnelle
+
+Le modèle tarifaire est donc déjà **centralisé** côté persistance, même si toutes les vues consommatrices ne l’exploitent pas encore de manière complète.
+
+## 5) Implication pour l’unification
 
 L’état actuel montre que l’intégration a déjà amorcé le bon mouvement :
 
 - un runtime central ;
 - des stores partagés ;
 - une API unifiée ;
-- un panel unique.
+- un panel unique ;
+- un modèle pricing stocké dans le catalogue.
 
 Le problème n’est donc plus “tout est éclaté”, mais plutôt “certaines vues utilisent déjà bien ce socle, d’autres ne l’exploitent pas encore complètement”.
 
-## 5) Point déjà identifié sur l’overview
+## 6) Point déjà identifié sur l’overview
 
 L’onglet **Accueil / overview** consomme bien `GET /api/home_suivi_elec/unified/dashboard`, mais `dashboard_overview.py` renvoie aujourd’hui une structure de coûts largement vide (`None`) alors que le frontend sait déjà afficher ces champs.
 
@@ -87,7 +114,7 @@ Cela suggère un état intermédiaire :
 - la chaîne scan / enrich / pricing est partiellement unifiée ;
 - mais certaines vues métier restent encore incomplètes.
 
-## 6) Suite recommandée
+## 7) Suite recommandée
 
 1. Documenter précisément les stores `catalogue` et `meta`.
 2. Cartographier `unified_api.py` et les responsabilités réelles de chaque vue.
