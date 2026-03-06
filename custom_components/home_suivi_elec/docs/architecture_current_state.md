@@ -92,7 +92,25 @@ Le backend stocke explicitement :
 
 Le modèle tarifaire est donc déjà **centralisé** côté persistance, même si toutes les vues consommatrices ne l’exploitent pas encore de manière complète.
 
-## 5) Implication pour l’unification
+## 5) API unifiée : rôle actuel
+
+`api/unified_api.py` joue aujourd’hui le rôle de registre central des endpoints HTTP exposés par l’intégration. La structure visible n’est plus celle d’APIs isolées par écran, mais déjà celle d’un routage regroupé par domaines fonctionnels.
+
+### Familles de vues actuellement enregistrées
+
+- **Base panel / disponibilité** : `PingView`, `FrontendManifestView`
+- **Scan / catalogue** : `EntitiesScanView`, `CatalogueGetView`, `CatalogueRefreshView`, `CatalogueItemTriageView`, `CatalogueTriageBulkView`, `CatalogueReferenceTotalView`
+- **Pricing** : `SettingsPricingView`
+- **Meta** : `MetaView`, `MetaSyncPreviewView`, `MetaSyncApplyView`
+- **Enrichissement** : `EnrichPreviewView`, `EnrichApplyView`, `EnrichDiagnoseView`, `EnrichCleanupView`
+- **Migration / export** : `MigrationExportView`
+- **Overview / dashboard** : `DashboardOverviewView`
+
+### Lecture fonctionnelle
+
+L’API unifiée sert déjà de **colonne vertébrale** entre les stores partagés et les onglets UI. La bonne direction n’est donc pas de recréer des backends parallèles, mais d’augmenter la cohérence et le niveau de complétude de cette couche unique.
+
+## 6) Implication pour l’unification
 
 L’état actuel montre que l’intégration a déjà amorcé le bon mouvement :
 
@@ -104,7 +122,7 @@ L’état actuel montre que l’intégration a déjà amorcé le bon mouvement 
 
 Le problème n’est donc plus “tout est éclaté”, mais plutôt “certaines vues utilisent déjà bien ce socle, d’autres ne l’exploitent pas encore complètement”.
 
-## 6) Point déjà identifié sur l’overview
+## 7) Point déjà identifié sur l’overview
 
 L’onglet **Accueil / overview** consomme bien `GET /api/home_suivi_elec/unified/dashboard`, mais `dashboard_overview.py` renvoie aujourd’hui une structure de coûts largement vide (`None`) alors que le frontend sait déjà afficher ces champs.
 
@@ -114,7 +132,7 @@ Cela suggère un état intermédiaire :
 - la chaîne scan / enrich / pricing est partiellement unifiée ;
 - mais certaines vues métier restent encore incomplètes.
 
-## 7) Suite recommandée
+## 8) Suite recommandée
 
 1. Documenter précisément les stores `catalogue` et `meta`.
 2. Cartographier `unified_api.py` et les responsabilités réelles de chaque vue.
