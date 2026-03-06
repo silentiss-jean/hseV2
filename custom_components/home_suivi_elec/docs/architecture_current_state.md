@@ -69,9 +69,11 @@ Le bloc `meta` constitue un second store partagé, distinct du catalogue. Il ser
 
 Cette lecture montre aussi une séparation intéressante : le store `meta` ne contient pas seulement des suggestions auto, mais bien les décisions durables de customisation utilisateur (`rooms`, `types`, `assignments`, `rules`). On est donc face à un vrai **modèle métier éditable**, pas juste à une projection calculée de Home Assistant.
 
-### Preview sync
+### Preview / apply sync
 
-`MetaSyncPreviewView` ne recalcule pas elle-même le diff : elle délègue à un callable partagé `meta_sync_tick`, peut demander ou non la persistance (`persist=false`), puis renvoie à la fois le résultat `sync` et l’état courant de `meta_store`. Cela confirme le même motif architectural que pour le catalogue : la vue HTTP sert d’adaptateur mince au-dessus d’une capacité runtime partagée.
+`MetaSyncPreviewView` ne recalcule pas elle-même le diff : elle délègue à un callable partagé `meta_sync_tick`, peut demander ou non la persistance (`persist=false`), puis renvoie à la fois le résultat `sync` et l’état courant de `meta_store`.
+
+`MetaSyncApplyView` complète logiquement le cycle : il lit `sync.pending_diff`, refuse un apply sans changements en attente, accepte un `apply_mode` (`auto` ou `all`), applique le diff via `apply_pending_diff`, met à jour `meta.updated_at` et `meta_store.generated_at`, puis vide `pending_diff` et persiste. La synchronisation meta apparaît donc maintenant comme une chaîne backend complète **preview -> validation -> apply -> persist**, avec la logique métier de mutation concentrée en dehors de la vue HTTP.
 
 ### Règles importantes
 
@@ -99,16 +101,15 @@ Le backend stocke explicitement :
 - selon le contrat, soit `fixed_energy_per_kwh`, soit `hp_energy_per_kwh` + `hc_energy_per_kwh` + `hc_schedule` ;
 - `updated_at`.
 
-### Règles déjà en place
+### Validation et garde-fous
 
-- Le backend ne déduit pas la TVA : il exige des valeurs HT et TTC explicites.
-- Les `entity_id` sélectionnés sont validés syntaxiquement.
-- Le capteur de référence total ne peut pas faire partie de `cost_entity_ids`.
-- Des valeurs par défaut existent déjà pour aider l’UI à préremplir un contrat cohérent.
+`SettingsPricingView` confirme que le pricing est lui aussi un vrai bloc de persistance validé côté backend. La vue fournit des valeurs par défaut cohérentes au `GET`, sait effacer totalement la config via `clear`, valide strictement `contract_type`, `display_mode`, les paires de prix `{ht, ttc}`, la liste `cost_entity_ids`, et les horaires `hc_schedule` au format `HH:MM`.
+
+La vue réaffirme aussi deux invariants importants : la TVA n’est jamais déduite implicitement, et le capteur marqué `reference_total` dans le catalogue ne peut jamais apparaître dans `cost_entity_ids`. Une fois validé, le bloc pricing est écrit dans `catalogue.settings.pricing`, `generated_at` est mis à jour, puis `catalogue_save` persiste l’ensemble.
 
 ### Lecture fonctionnelle
 
-Le modèle tarifaire est donc déjà **centralisé** côté persistance, même si toutes les vues consommatrices ne l’exploitent pas encore de manière complète.
+Le modèle tarifaire est donc déjà **centralisé et défensif** côté persistance. Il est plus avancé qu’un simple formulaire de config, mais il lui manque encore la couche de calcul mutualisée qui consommerait pleinement ce contrat pour alimenter l’overview et les futurs coûts dérivés.
 
 ## 5) API unifiée : rôle actuel
 
