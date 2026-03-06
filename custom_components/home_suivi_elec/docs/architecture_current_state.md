@@ -39,9 +39,13 @@ La fusion repose sur une logique d’item persistant :
 - une escalade est produite selon le temps d’indisponibilité (`none`, `warning_15m`, `error_24h`, `action_48h`) ;
 - un item marqué `triage.policy = removed` ne garde jamais d’escalade active.
 
+### Vue catalogue exposée
+
+`CatalogueGetView` renvoie directement le store `catalogue` présent dans `hass.data[DOMAIN]`, avec un fallback minimal `{schema_version, generated_at, items, settings}` si rien n’est encore chargé. Cette vue ne reconstruit donc pas un modèle parallèle pour le frontend : elle expose le **store partagé** tel quel.
+
 ### Lecture fonctionnelle
 
-Le catalogue n’est donc pas une simple liste brute de détection. C’est déjà un **registre métier persistant** qui stabilise l’identité des capteurs, leur état de santé et une partie du triage.
+Le catalogue n’est donc pas une simple liste brute de détection. C’est déjà un **registre métier persistant** qui stabilise l’identité des capteurs, leur état de santé et une partie du triage, et la vue principale catalogue confirme que l’intention est bien de faire consommer ce socle directement par l’UI plutôt que de dupliquer la logique.
 
 ## 3) Meta : rôle actuel
 
@@ -172,11 +176,13 @@ Les vues d’enrichissement et d’export montrent qu’une partie importante de
 
 La vue renvoie ensuite un état de prévisualisation avec `per_source`, `to_create`, `already_ok`, `decisions_required` et un résumé quantitatif. Cela confirme que l’enrichissement est déjà pensé comme une **chaîne normalisée de dérivés énergétiques** à partir des capteurs de puissance sélectionnés.
 
-### Enrich apply / diagnose
+### Enrich apply / diagnose / cleanup
 
 `EnrichApplyView` montre que l’enrichissement n’est pas resté au stade “prévu”. Il sait déjà tenter une création réelle de helpers Home Assistant via config flows pour `integration` puis `utility_meter`, avec deux modes (`create_helpers` ou `export_yaml`), un `safe_mode`, et une logique `self_heal` pour supprimer des config entries orphelines avant rollback si nécessaire.
 
-`EnrichDiagnoseView` complète ce flux avec une lecture par `base` de l’état du capteur de puissance, du `kwh_total`, des compteurs périodiques, de l’existence en registry/config entry, et de hints de readiness comme “power unknown/unavailable” ou “kWh total encore unknown”. La chaîne enrichissement possède donc déjà un **cycle presque complet preview -> apply -> diagnose**, orienté aide à l’exploitation et récupération d’erreurs, pas seulement génération théorique.
+`EnrichDiagnoseView` complète ce flux avec une lecture par `base` de l’état du capteur de puissance, du `kwh_total`, des compteurs périodiques, de l’existence en registry/config entry, et de hints de readiness comme “power unknown/unavailable” ou “kWh total encore unknown”.
+
+`EnrichCleanupView` ferme la boucle de remédiation : il sait retrouver, en `dry_run` ou en suppression réelle, des config entries `integration` et `utility_meter` associées aux bases dérivées de la sélection pricing, avec une option `stale_only` pour ne cibler que les entrées orphelines sans entité présente. Cela confirme que la chaîne enrichissement possède déjà un **cycle très avancé preview -> apply -> diagnose -> cleanup**, orienté exploitation, auto-réparation et rollback, pas seulement génération théorique.
 
 ### Migration export
 
@@ -189,7 +195,7 @@ La vue renvoie ensuite un état de prévisualisation avec `per_source`, `to_crea
 
 ### Lecture fonctionnelle
 
-Cette couche montre déjà une orientation forte : les helpers HSE attendus sont explicitement nommés, la sélection pricing sert de point d’entrée naturel, et la migration/export sert de pont entre l’existant Home Assistant et le modèle cible HSE. La lecture plus complète des fichiers fait apparaître une nuance importante : le flux enrichissement est déjà assez avancé sur la création et le diagnostic des helpers, alors que la partie coût reste encore minimale, dépend du contrat `fixed`, et ne constitue pas encore un moteur complet mutualisé pour l’overview.
+Cette couche montre déjà une orientation forte : les helpers HSE attendus sont explicitement nommés, la sélection pricing sert de point d’entrée naturel, et la migration/export sert de pont entre l’existant Home Assistant et le modèle cible HSE. La lecture plus complète des fichiers fait apparaître une nuance importante : le flux enrichissement est déjà très avancé sur la création, le diagnostic et le nettoyage des helpers, alors que la partie coût reste encore minimale, dépend du contrat `fixed`, et ne constitue pas encore un moteur complet mutualisé pour l’overview.
 
 ## 8) Frontend / thème : état actuel
 
