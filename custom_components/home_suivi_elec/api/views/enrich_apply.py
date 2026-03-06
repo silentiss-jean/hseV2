@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.helpers import entity_registry as er
 
+from ...catalogue_defaults import ensure_item_defaults
 from ...const import API_PREFIX, DOMAIN
 from ...scan_engine import detect_kind
+from ...time_utils import utc_now_iso
 from .enrich_preview import derive_base_slug
 from .migration_export import _mk_integration_sensor_yaml, _mk_utility_meter_yaml, _safe_yaml
 
@@ -95,6 +97,103 @@ async def _wait_for_entity_or_registry(*, hass, ent_reg, entity_id: str, timeout
     return False
 
 
+def _current_reference_entity_id(catalogue: dict | None) -> str | None:
+    items = (catalogue or {}).get("items") or {}
+    if not isinstance(items, dict):
+        return None
+    for item in items.values():
+        if not isinstance(item, dict):
+            continue
+        enrichment = item.get("enrichment") or {}
+        if not isinstance(enrichment, dict) or enrichment.get("is_reference_total") is not True:
+            continue
+        source = item.get("source") or {}
+        entity_id = source.get("entity_id") if isinstance(source, dict) else None
+        if isinstance(entity_id, str) and entity_id:
+            return entity_id
+    return None
+
+
+def _find_catalogue_item_by_source_entity_id(catalogue: dict | None, entity_id: str) -> tuple[str | None, dict | None]:
+    items = (catalogue or {}).get("items") or {}
+    if not isinstance(items, dict):
+        return None, None
+    for item_id, item in items.items():
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source") or {}
+        current_entity_id = source.get("entity_id") if isinstance(source, dict) else None
+        if current_entity_id == entity_id:
+            return item_id, item
+    return None, None
+
+
+def _energy_helper_entity_ids(base: str) -> dict[str, str]:
+    return {
+        "total": f"sensor.{base}_kwh_total",
+        "day": f"sensor.{base}_kwh_day",
+        "week": f"sensor.{base}_kwh_week",
+        "month": f"sensor.{base}_kwh_month",
+        "year": f"sensor.{base}_kwh_year",
+    }
+
+
+def _entity_exists(hass, ent_reg, entity_id: str | None) -> bool:
+    if not isinstance(entity_id, str) or not entity_id:
+        return False
+    return hass.states.get(entity_id) is not None or ent_reg.async_get(entity_id) is not None
+
+
+def _build_energy_helper_mapping(*, hass, ent_reg, power_entity_id: str, helper_entity_ids: dict[str, str]) -> dict:
+    issues: list[str] = []
+    resolved: dict[str, str | None] = {}
+
+    for key in ("total", "day", "week", "month", "year"):
+        entity_id = helper_entity_ids.get(key)
+        if _entity_exists(hass, ent_reg, entity_id):
+            resolved[key] = entity_id
+        else:
+            resolved[key] = None
+            issues.append(f"missing:{key}")
+
+    present_count = sum(1 for key in ("total", "day", "week", "month", "year") if resolved.get(key))
+    if present_count == 5:
+        status = "ready"
+    elif present_count > 0:
+        status = "partial"
+    else:
+        status = "unknown"
+
+    return {
+        "source_power_entity_id": power_entity_id,
+        "total": resolved.get("total"),
+        "day": resolved.get("day"),
+        "week": resolved.get("week"),
+        "month": resolved.get("month"),
+        "year": resolved.get("year"),
+        "status": status,
+        "resolution_mode": "explicit",
+        "last_resolved_at": utc_now_iso(),
+        "issues": issues,
+    }
+
+
+def _persist_energy_helper_mapping(*, catalogue: dict | None, power_entity_id: str, mapping: dict) -> bool:
+    if not isinstance(catalogue, dict):
+        return False
+
+    _item_id, item = _find_catalogue_item_by_source_entity_id(catalogue, power_entity_id)
+    if item is None:
+        return False
+
+    ensure_item_defaults(item, base_entity_id=power_entity_id)
+    derived = item.setdefault("derived", {})
+    helpers = derived.setdefault("helpers", {})
+    energy = helpers.setdefault("energy", {})
+    energy.update(mapping)
+    return True
+
+
 async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[dict]) -> dict:
     """Best-effort helper creation via config flows."""
 
@@ -160,13 +259,25 @@ class EnrichApplyView(HomeAssistantView):
         safe_mode = body.get("safe", True)
         self_heal = body.get("self_heal", True)
 
+        domain_data = hass.data.get(DOMAIN, {})
+        catalogue = domain_data.get("catalogue") or {}
+        catalogue_save = domain_data.get("catalogue_save")
+
         entity_ids = body.get("entity_ids")
         if not isinstance(entity_ids, list) or not entity_ids:
-            cat = hass.data.get(DOMAIN, {}).get("catalogue") or {}
-            settings = cat.get("settings") if isinstance(cat, dict) else {}
+            settings = catalogue.get("settings") if isinstance(catalogue, dict) else {}
             pricing = settings.get("pricing") if isinstance(settings, dict) else {}
             cids = pricing.get("cost_entity_ids") if isinstance(pricing, dict) else []
             entity_ids = [x for x in cids if isinstance(x, str) and x]
+
+            reference_entity_id = _current_reference_entity_id(catalogue)
+            if reference_entity_id and reference_entity_id not in entity_ids:
+                entity_ids.append(reference_entity_id)
+        else:
+            entity_ids = [x for x in entity_ids if isinstance(x, str) and x]
+
+        seen: set[str] = set()
+        entity_ids = [x for x in entity_ids if not (x in seen or seen.add(x))]
 
         created: list[dict] = []
         skipped: list[dict] = []
@@ -174,6 +285,7 @@ class EnrichApplyView(HomeAssistantView):
         decisions_required: list[dict] = []
 
         ent_reg = er.async_get(hass)
+        catalogue_dirty = False
 
         bases = {}
         for eid in entity_ids:
@@ -215,12 +327,14 @@ class EnrichApplyView(HomeAssistantView):
         if mode == "create_helpers":
             for base, info in sorted(bases.items()):
                 power_eid = info.get("power_entity_id")
+                helper_entity_ids = _energy_helper_entity_ids(base)
+                total_eid = helper_entity_ids["total"]
+
                 if not power_eid:
                     skipped.append({"entity_id": base, "reason": "missing_power_entity"})
                     continue
 
                 total_name = f"{base}_kwh_total"
-                total_eid = f"sensor.{total_name}"
 
                 # 0) Preflight power (optional but improves UX)
                 power_state = hass.states.get(power_eid)
@@ -234,6 +348,14 @@ class EnrichApplyView(HomeAssistantView):
                             "hint": "Le capteur de puissance est unknown/unavailable. Attends une première mesure (allume une charge) puis relance.",
                         }
                     )
+                    mapping = _build_energy_helper_mapping(
+                        hass=hass,
+                        ent_reg=ent_reg,
+                        power_entity_id=power_eid,
+                        helper_entity_ids=helper_entity_ids,
+                    )
+                    if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
+                        catalogue_dirty = True
                     continue
 
                 # 1) Integration helper (power -> kWh total)
@@ -255,6 +377,14 @@ class EnrichApplyView(HomeAssistantView):
                                         "hint": "Une config entry existe mais l'entité est absente. Va dans Settings → Devices & services → Helpers et supprime l'entrée, ou utilise enrich/cleanup.",
                                     }
                                 )
+                                mapping = _build_energy_helper_mapping(
+                                    hass=hass,
+                                    ent_reg=ent_reg,
+                                    power_entity_id=power_eid,
+                                    helper_entity_ids=helper_entity_ids,
+                                )
+                                if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
+                                    catalogue_dirty = True
                                 continue
                         else:
                             errors.append(
@@ -265,6 +395,14 @@ class EnrichApplyView(HomeAssistantView):
                                     "error": "config_entry_exists_but_entity_missing",
                                 }
                             )
+                            mapping = _build_energy_helper_mapping(
+                                hass=hass,
+                                ent_reg=ent_reg,
+                                power_entity_id=power_eid,
+                                helper_entity_ids=helper_entity_ids,
+                            )
+                            if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
+                                catalogue_dirty = True
                             continue
 
                     # Integral helper needs unit_time to build unit (kWh from W) on many HA versions.
@@ -296,6 +434,14 @@ class EnrichApplyView(HomeAssistantView):
                                     "hint": "L'entité n'a pas été créée après le flow. Vérifie Settings → System → Logs (filtre 'integration').",
                                 }
                             )
+                            mapping = _build_energy_helper_mapping(
+                                hass=hass,
+                                ent_reg=ent_reg,
+                                power_entity_id=power_eid,
+                                helper_entity_ids=helper_entity_ids,
+                            )
+                            if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
+                                catalogue_dirty = True
                             continue
                     else:
                         errors.append(
@@ -307,6 +453,14 @@ class EnrichApplyView(HomeAssistantView):
                                 "hint": "Échec du config flow. Vérifie Settings → System → Logs.",
                             }
                         )
+                        mapping = _build_energy_helper_mapping(
+                            hass=hass,
+                            ent_reg=ent_reg,
+                            power_entity_id=power_eid,
+                            helper_entity_ids=helper_entity_ids,
+                        )
+                        if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
+                            catalogue_dirty = True
                         continue
                 else:
                     skipped.append({"entity_id": total_eid, "reason": "already_exists_or_registered", "registry": bool(reg_entry)})
@@ -323,6 +477,14 @@ class EnrichApplyView(HomeAssistantView):
                             "hint": "Le compteur kWh total est encore unknown. Attends une première mesure de puissance, puis relance la création des compteurs (day/week/month/year).",
                         }
                     )
+                    mapping = _build_energy_helper_mapping(
+                        hass=hass,
+                        ent_reg=ent_reg,
+                        power_entity_id=power_eid,
+                        helper_entity_ids=helper_entity_ids,
+                    )
+                    if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
+                        catalogue_dirty = True
                     continue
 
                 cycles = [
@@ -334,7 +496,7 @@ class EnrichApplyView(HomeAssistantView):
 
                 for suf, cycle in cycles:
                     meter_name = f"{base}_kwh_{suf}"
-                    meter_eid = f"sensor.{meter_name}"
+                    meter_eid = helper_entity_ids[suf]
                     reg_meter = ent_reg.async_get(meter_eid)
 
                     if hass.states.get(meter_eid) is not None or reg_meter is not None:
@@ -411,9 +573,30 @@ class EnrichApplyView(HomeAssistantView):
                     else:
                         errors.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "error": res.get("error")})
 
+                mapping = _build_energy_helper_mapping(
+                    hass=hass,
+                    ent_reg=ent_reg,
+                    power_entity_id=power_eid,
+                    helper_entity_ids=helper_entity_ids,
+                )
+                if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
+                    catalogue_dirty = True
+                else:
+                    errors.append({
+                        "entity_id": power_eid,
+                        "kind": "catalogue",
+                        "base": base,
+                        "error": "catalogue_item_not_found_for_helper_mapping",
+                    })
+
         else:
             for base in sorted(bases.keys()):
                 skipped.append({"entity_id": f"sensor.{base}_kwh_total", "reason": "export_ready"})
+
+        if catalogue_dirty and isinstance(catalogue, dict):
+            catalogue["generated_at"] = utc_now_iso()
+            if catalogue_save:
+                await catalogue_save()
 
         return self.json(
             {
