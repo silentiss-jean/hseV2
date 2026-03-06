@@ -39,13 +39,15 @@ La fusion repose sur une logique d’item persistant :
 - une escalade est produite selon le temps d’indisponibilité (`none`, `warning_15m`, `error_24h`, `action_48h`) ;
 - un item marqué `triage.policy = removed` ne garde jamais d’escalade active.
 
-### Vue catalogue exposée
+### Vues catalogue exposées
 
-`CatalogueGetView` renvoie directement le store `catalogue` présent dans `hass.data[DOMAIN]`, avec un fallback minimal `{schema_version, generated_at, items, settings}` si rien n’est encore chargé. Cette vue ne reconstruit donc pas un modèle parallèle pour le frontend : elle expose le **store partagé** tel quel.
+`CatalogueGetView` renvoie directement le store `catalogue` présent dans `hass.data[DOMAIN]`, avec un fallback minimal `{schema_version, generated_at, items, settings}` si rien n’est encore chargé. `CatalogueRefreshView` ne reconstruit pas elle-même le catalogue : elle délègue à un callable partagé `catalogue_refresh` et renvoie le résultat du refresh forcé.
+
+`CatalogueItemTriageView` modifie directement le `triage` d’un item du store partagé (`policy`, `mute_until`, `note`), met à jour `updated_at`, puis déclenche immédiatement `catalogue_save` si disponible. Le triage n’est donc pas un état UI temporaire : c’est déjà une **donnée persistée au cœur du catalogue**.
 
 ### Lecture fonctionnelle
 
-Le catalogue n’est donc pas une simple liste brute de détection. C’est déjà un **registre métier persistant** qui stabilise l’identité des capteurs, leur état de santé et une partie du triage, et la vue principale catalogue confirme que l’intention est bien de faire consommer ce socle directement par l’UI plutôt que de dupliquer la logique.
+Le catalogue n’est donc pas une simple liste brute de détection. C’est déjà un **registre métier persistant** qui stabilise l’identité des capteurs, leur état de santé et une partie du triage, et les vues principales catalogue confirment que l’intention est bien de faire consommer et modifier ce socle partagé directement, plutôt que de dupliquer la logique dans les endpoints.
 
 ## 3) Meta : rôle actuel
 
