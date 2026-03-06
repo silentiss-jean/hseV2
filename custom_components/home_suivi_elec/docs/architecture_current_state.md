@@ -156,7 +156,36 @@ Le frontend `overview.view.js` est déjà prêt à consommer ces données comme 
 
 L’overview est donc dans un état de **contrat avancé mais moteur incomplet** : la structure API et l’UI sont déjà dessinées, mais la couche métier de calcul n’alimente pas encore ces champs.
 
-## 7) Implication pour l’unification
+## 7) Enrichissement / migration : état actuel
+
+Les vues d’enrichissement et d’export montrent qu’une partie importante de la logique métier vise déjà à standardiser les entités dérivées plutôt qu’à laisser chaque écran recalculer ses propres conventions.
+
+### Enrich preview
+
+`EnrichPreviewView` prend par défaut la sélection `pricing.cost_entity_ids`, filtre les entités de type `power`, dérive un `base slug`, puis calcule les entités attendues suivantes :
+
+- `sensor.<base>_kwh_total`
+- `sensor.<base>_kwh_day`
+- `sensor.<base>_kwh_week`
+- `sensor.<base>_kwh_month`
+- `sensor.<base>_kwh_year`
+
+La vue renvoie ensuite un état de prévisualisation avec `per_source`, `to_create`, `already_ok`, `decisions_required` et un résumé quantitatif. Cela confirme que l’enrichissement est déjà pensé comme une **chaîne normalisée de dérivés énergétiques** à partir des capteurs de puissance sélectionnés.
+
+### Migration export
+
+`MigrationExportView` relit également le pricing et la sélection courante, reconstruit des `base` par capteur, puis génère plusieurs exports YAML :
+
+- un export `integration` pour créer `sensor.<base>_kwh_total` à partir d’un capteur de puissance ;
+- un export `utility_meter` pour créer les compteurs jour / semaine / mois / année ;
+- un export de capteurs de coût template pour contrat `fixed` seulement ;
+- une option 4 marquée comme non implémentée.
+
+### Lecture fonctionnelle
+
+Cette couche montre déjà une orientation forte : les helpers HSE attendus sont explicitement nommés, la sélection pricing sert de point d’entrée naturel, et la migration/export sert de pont entre l’existant Home Assistant et le modèle cible HSE. En revanche, la partie coût exportée reste minimale, dépend du contrat `fixed`, et ne constitue pas encore un moteur complet mutualisé pour l’overview.
+
+## 8) Implication pour l’unification
 
 L’état actuel montre que l’intégration a déjà amorcé le bon mouvement :
 
@@ -164,11 +193,12 @@ L’état actuel montre que l’intégration a déjà amorcé le bon mouvement 
 - des stores partagés ;
 - une API unifiée ;
 - un panel unique ;
-- un modèle pricing stocké dans le catalogue.
+- un modèle pricing stocké dans le catalogue ;
+- une convention d’enrichissement et d’export déjà partiellement normalisée.
 
 Le problème n’est donc plus “tout est éclaté”, mais plutôt “certaines vues utilisent déjà bien ce socle, d’autres ne l’exploitent pas encore complètement”.
 
-## 8) Point déjà identifié sur l’overview
+## 9) Point déjà identifié sur l’overview
 
 L’onglet **Accueil / overview** consomme bien `GET /api/home_suivi_elec/unified/dashboard`, mais `dashboard_overview.py` renvoie aujourd’hui une structure de coûts largement vide (`None`) alors que le frontend sait déjà afficher ces champs.
 
@@ -178,7 +208,7 @@ Cela suggère un état intermédiaire :
 - la chaîne scan / enrich / pricing est partiellement unifiée ;
 - mais certaines vues métier restent encore incomplètes.
 
-## 9) Suite recommandée
+## 10) Suite recommandée
 
 1. Documenter précisément les stores `catalogue` et `meta`.
 2. Cartographier `unified_api.py` et les responsabilités réelles de chaque vue.
