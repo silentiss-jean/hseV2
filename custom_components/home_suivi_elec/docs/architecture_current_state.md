@@ -43,11 +43,13 @@ La fusion repose sur une logique d’item persistant :
 
 `CatalogueGetView` renvoie directement le store `catalogue` présent dans `hass.data[DOMAIN]`, avec un fallback minimal `{schema_version, generated_at, items, settings}` si rien n’est encore chargé. `CatalogueRefreshView` ne reconstruit pas elle-même le catalogue : elle délègue à un callable partagé `catalogue_refresh` et renvoie le résultat du refresh forcé.
 
-`CatalogueItemTriageView` modifie directement le `triage` d’un item du store partagé (`policy`, `mute_until`, `note`), met à jour `updated_at`, puis déclenche immédiatement `catalogue_save` si disponible. Le triage n’est donc pas un état UI temporaire : c’est déjà une **donnée persistée au cœur du catalogue**.
+`CatalogueItemTriageView` modifie directement le `triage` d’un item du store partagé (`policy`, `mute_until`, `note`), met à jour `updated_at`, puis déclenche immédiatement `catalogue_save` si disponible. `CatalogueTriageBulkView` applique la même logique sur une liste d’items, avec une exigence explicite de sécurité/idempotence et une persistance unique en fin d’opération.
+
+`CatalogueReferenceTotalView` gère de manière centralisée le capteur de référence totale : il résout l’`entity_id` cible dans le catalogue, refuse les entrées hors catalogue, efface l’éventuel ancien `is_reference_total`, marque la nouvelle cible, et impose l’invariant `enrichment.include = False` pour qu’un capteur de référence ne soit jamais compté dans les totaux internes.
 
 ### Lecture fonctionnelle
 
-Le catalogue n’est donc pas une simple liste brute de détection. C’est déjà un **registre métier persistant** qui stabilise l’identité des capteurs, leur état de santé et une partie du triage, et les vues principales catalogue confirment que l’intention est bien de faire consommer et modifier ce socle partagé directement, plutôt que de dupliquer la logique dans les endpoints.
+Le catalogue n’est donc pas une simple liste brute de détection. C’est déjà un **registre métier persistant** qui stabilise l’identité des capteurs, leur état de santé, le triage, et les règles de référence totale. Les vues principales catalogue confirment que l’intention est bien de faire consommer et modifier ce socle partagé directement, plutôt que de dupliquer la logique dans les endpoints.
 
 ## 3) Meta : rôle actuel
 
