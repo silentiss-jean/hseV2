@@ -110,7 +110,53 @@ Le modèle tarifaire est donc déjà **centralisé** côté persistance, même s
 
 L’API unifiée sert déjà de **colonne vertébrale** entre les stores partagés et les onglets UI. La bonne direction n’est donc pas de recréer des backends parallèles, mais d’augmenter la cohérence et le niveau de complétude de cette couche unique.
 
-## 6) Implication pour l’unification
+## 6) Overview : contrat actuel
+
+Le backend `dashboard_overview.py` respecte déjà une intention utile : un endpoint unique pour l’Accueil, tolérant aux données manquantes et capable de renvoyer des `warnings` au lieu d’échouer brutalement.
+
+### Ce que le backend fournit réellement
+
+La vue `/dashboard` renvoie aujourd’hui notamment :
+
+- `pricing` et `defaults` ;
+- `selected` avec la liste des `cost_entity_ids` et leur puissance live ;
+- `top_live` et `computed.total_power_w` ;
+- `reference` et `delta` pour le capteur de référence total ;
+- `totals`, `cumulative_table`, `reference_table`, `delta_table` ;
+- `per_sensor_costs` ;
+- `meta_sync` ;
+- `warnings`.
+
+### Ce qui est déjà vivant
+
+- La sélection des capteurs de coût est bien relue depuis le pricing.
+- La puissance instantanée est recalculée à partir des états Home Assistant.
+- Le capteur de référence total est bien pris en compte pour le delta live.
+- Le résumé `meta_sync` est déjà remonté dans le dashboard.
+
+### Ce qui reste vide ou incomplet
+
+Les structures de coûts sont actuellement initialisées mais non calculées :
+
+- `totals.week|month|year` contiennent des champs présents mais à `None` ;
+- `cumulative_table`, `reference_table` et `delta_table` sont créés avec le bon schéma, mais sans valeurs ;
+- `per_sensor_costs` existe, mais ses colonnes `hour/day/week/month/year` restent à `None`.
+
+### Contrat frontend observé
+
+Le frontend `overview.view.js` est déjà prêt à consommer ces données comme si elles étaient réellement calculées. Il affiche :
+
+- les cartes de coûts globaux semaine / mois / année ;
+- les tableaux par période avec `kWh`, `cost_ht`, `cost_ttc`, `total_ht`, `total_ttc` ;
+- le tableau `Coûts par capteur` trié par coût journalier ;
+- les champs d’abonnement TTC et de total TTC ;
+- le delta entre référence externe et somme interne.
+
+### Lecture fonctionnelle
+
+L’overview est donc dans un état de **contrat avancé mais moteur incomplet** : la structure API et l’UI sont déjà dessinées, mais la couche métier de calcul n’alimente pas encore ces champs.
+
+## 7) Implication pour l’unification
 
 L’état actuel montre que l’intégration a déjà amorcé le bon mouvement :
 
@@ -122,7 +168,7 @@ L’état actuel montre que l’intégration a déjà amorcé le bon mouvement 
 
 Le problème n’est donc plus “tout est éclaté”, mais plutôt “certaines vues utilisent déjà bien ce socle, d’autres ne l’exploitent pas encore complètement”.
 
-## 7) Point déjà identifié sur l’overview
+## 8) Point déjà identifié sur l’overview
 
 L’onglet **Accueil / overview** consomme bien `GET /api/home_suivi_elec/unified/dashboard`, mais `dashboard_overview.py` renvoie aujourd’hui une structure de coûts largement vide (`None`) alors que le frontend sait déjà afficher ces champs.
 
@@ -132,7 +178,7 @@ Cela suggère un état intermédiaire :
 - la chaîne scan / enrich / pricing est partiellement unifiée ;
 - mais certaines vues métier restent encore incomplètes.
 
-## 8) Suite recommandée
+## 9) Suite recommandée
 
 1. Documenter précisément les stores `catalogue` et `meta`.
 2. Cartographier `unified_api.py` et les responsabilités réelles de chaque vue.
