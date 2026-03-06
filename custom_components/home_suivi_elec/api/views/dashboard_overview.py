@@ -108,6 +108,56 @@ def _mk_period_table(agg: dict[str, dict[str, float | None]], pricing: dict[str,
     return [_mk_period_row(period, agg, pricing) for period in _PERIODS]
 
 
+def _sub_opt(a: float | None, b: float | None) -> float | None:
+    if a is None or b is None:
+        return None
+    return float(a) - float(b)
+
+
+def _build_delta_period_table(
+    reference_agg: dict[str, dict[str, float | None]],
+    internal_agg: dict[str, dict[str, float | None]],
+    pricing: dict[str, Any] | None,
+) -> list[dict]:
+    rows: list[dict] = []
+    for period in _PERIODS:
+        ref_cur = reference_agg.get(period) if isinstance(reference_agg, dict) else {}
+        int_cur = internal_agg.get(period) if isinstance(internal_agg, dict) else {}
+
+        cost_ht = _sub_opt(
+            ref_cur.get("conso_ht") if isinstance(ref_cur, dict) else None,
+            int_cur.get("conso_ht") if isinstance(int_cur, dict) else None,
+        )
+        cost_ttc = _sub_opt(
+            ref_cur.get("conso_ttc") if isinstance(ref_cur, dict) else None,
+            int_cur.get("conso_ttc") if isinstance(int_cur, dict) else None,
+        )
+        kwh = _sub_opt(
+            ref_cur.get("energy_kwh") if isinstance(ref_cur, dict) else None,
+            int_cur.get("energy_kwh") if isinstance(int_cur, dict) else None,
+        )
+
+        ref_sub_ht, ref_sub_ttc = _subscription_for_period(pricing, period)
+        int_sub_ht, int_sub_ttc = _subscription_for_period(pricing, period)
+        delta_sub_ht = _sub_opt(ref_sub_ht, int_sub_ht)
+        delta_sub_ttc = _sub_opt(ref_sub_ttc, int_sub_ttc)
+
+        total_ht = None if cost_ht is None else float(cost_ht) + float(delta_sub_ht or 0.0)
+        total_ttc = None if cost_ttc is None else float(cost_ttc) + float(delta_sub_ttc or 0.0)
+
+        rows.append(
+            {
+                "period": period,
+                "kwh": kwh,
+                "cost_ht": cost_ht,
+                "cost_ttc": cost_ttc,
+                "total_ht": total_ht,
+                "total_ttc": total_ttc,
+            }
+        )
+    return rows
+
+
 def _meta_sync_summary(domain_data: dict) -> dict:
     meta_store = domain_data.get("meta")
     if not isinstance(meta_store, dict):
@@ -216,6 +266,14 @@ class DashboardOverviewView(HomeAssistantView):
             for warning in snap.get("warnings") or []:
                 warnings.append(f"{snap.get('entity_id')}:{warning}")
 
+        reference_snapshot = None
+        reference_aggregate: dict[str, dict[str, float | None]] = {}
+        if ref_eid:
+            reference_snapshot = build_sensor_cost_snapshot(hass, pricing, ref_eid)
+            reference_aggregate = aggregate_sensor_cost_snapshots([reference_snapshot])
+            for warning in reference_snapshot.get("warnings") or []:
+                warnings.append(f"reference:{ref_eid}:{warning}")
+
         totals = {}
         for period in ("week", "month", "year"):
             cur = aggregate.get(period) or {}
@@ -233,8 +291,8 @@ class DashboardOverviewView(HomeAssistantView):
             }
 
         cumulative_table = _mk_period_table(aggregate, pricing)
-        reference_table = []
-        delta_table = []
+        reference_table = _mk_period_table(reference_aggregate, pricing) if reference_snapshot else []
+        delta_table = _build_delta_period_table(reference_aggregate, aggregate, pricing) if reference_snapshot else []
 
         per_sensor_costs = []
         for snap in sensor_snapshots:
