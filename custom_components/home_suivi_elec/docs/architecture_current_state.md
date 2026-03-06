@@ -25,6 +25,12 @@ Le point d’entrée `__init__.py` fait aujourd’hui plusieurs choses structura
 
 Le runtime ne se contente plus d’exposer des vues isolées : il met déjà en place un **socle partagé** pour l’ensemble des onglets. La doc future doit donc partir de cette réalité et non d’une lecture “un onglet = un backend indépendant”.
 
+### Ce que confirme la lecture de `__init__.py`
+
+La lecture complète du bootstrap renforce fortement une conclusion importante : les callables runtime partagés déjà installés dans `hass.data[DOMAIN]` concernent surtout deux axes, `catalogue_refresh` et `meta_sync_tick`. Le premier reconstruit les candidats `sensor.*`, filtre les entités HSE, détecte `power/energy`, fusionne dans le catalogue persistant via `merge_scan_into_catalogue`, sauvegarde puis synchronise les repairs ; le second calcule le snapshot HA, produit le `pending_diff` meta, met à jour `sync`, et persiste si demandé.
+
+Autrement dit, le runtime central expose déjà des capacités transverses réelles, mais elles restent concentrées sur **scan / fusion catalogue / sync meta / persistence**. La lecture ne révèle pas de troisième callable partagé dédié à un calcul coût/énergie, ni de tâche périodique spécialisée qui pré-calculerait les tables de l’overview hors du endpoint lui-même.
+
 ## 2) Catalogue : rôle actuel
 
 Le refresh catalogue scanne les `sensor.*`, détecte leur nature (`power` / `energy`), ignore les entités HSE générées, puis construit un payload de scan fusionné dans le store persistant.
