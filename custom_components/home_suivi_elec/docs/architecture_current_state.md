@@ -185,7 +185,29 @@ La vue renvoie ensuite un état de prévisualisation avec `per_source`, `to_crea
 
 Cette couche montre déjà une orientation forte : les helpers HSE attendus sont explicitement nommés, la sélection pricing sert de point d’entrée naturel, et la migration/export sert de pont entre l’existant Home Assistant et le modèle cible HSE. En revanche, la partie coût exportée reste minimale, dépend du contrat `fixed`, et ne constitue pas encore un moteur complet mutualisé pour l’overview.
 
-## 8) Implication pour l’unification
+## 8) Frontend / thème : état actuel
+
+La couche UI montre déjà une orientation compatible avec ton objectif de continuer à faire évoluer les thèmes via variables CSS plutôt que par styles figés.
+
+### Panel CSS
+
+`style.hse.panel.css` définit un petit ensemble de variables HSE de base au niveau `:host`, comme `--hse_bg`, `--hse_fg`, `--hse_muted`, `--hse_border`, `--hse_card_bg`, `--hse_accent`, `--hse_danger`, puis construit les composants du panel (`card`, `button`, `input`, `table`, etc.) à partir de ces variables. Les couleurs ne sont donc pas codées en dur pour les composants principaux ; elles sont déjà dérivées d’un niveau d’abstraction HSE.
+
+### Couche d’alias
+
+`hse_alias.v2.css` montre une seconde couche importante : des alias HSE “v2” sont rebranchés vers les variables “v1”, par exemple `--hse_border -> --hse-border`, `--hse_muted -> --hse-text-muted`, `--hse_card_bg -> --hse-surface`, `--hse_accent -> --hse-accent`, `--hse_radius -> --hse-radius-lg`. Cela confirme que le système de thème est prévu pour évoluer par ajout d’alias et de tokens, plutôt que par réécriture brutale des vues.
+
+### Lecture fonctionnelle
+
+Pour continuer à coder l’UI proprement, la bonne pratique est donc de prolonger ce modèle :
+
+- ajouter de nouvelles variables HSE quand un besoin visuel est récurrent ;
+- brancher ces variables dans la couche d’alias/tokens plutôt que d’introduire des couleurs ou espacements en dur dans les vues ;
+- garder les composants JS et les écrans dépendants des tokens, pas des valeurs finales.
+
+Cette lecture va bien dans le sens de ce que tu décris : les thèmes custom ne sont pas figés, et la dette à éviter est surtout l’introduction de styles locaux non tokenisés.
+
+## 9) Implication pour l’unification
 
 L’état actuel montre que l’intégration a déjà amorcé le bon mouvement :
 
@@ -194,11 +216,12 @@ L’état actuel montre que l’intégration a déjà amorcé le bon mouvement 
 - une API unifiée ;
 - un panel unique ;
 - un modèle pricing stocké dans le catalogue ;
-- une convention d’enrichissement et d’export déjà partiellement normalisée.
+- une convention d’enrichissement et d’export déjà partiellement normalisée ;
+- une couche UI déjà compatible avec une évolution par tokens CSS.
 
 Le problème n’est donc plus “tout est éclaté”, mais plutôt “certaines vues utilisent déjà bien ce socle, d’autres ne l’exploitent pas encore complètement”.
 
-## 9) Point déjà identifié sur l’overview
+## 10) Point déjà identifié sur l’overview
 
 L’onglet **Accueil / overview** consomme bien `GET /api/home_suivi_elec/unified/dashboard`, mais `dashboard_overview.py` renvoie aujourd’hui une structure de coûts largement vide (`None`) alors que le frontend sait déjà afficher ces champs.
 
@@ -208,7 +231,7 @@ Cela suggère un état intermédiaire :
 - la chaîne scan / enrich / pricing est partiellement unifiée ;
 - mais certaines vues métier restent encore incomplètes.
 
-## 10) Suite recommandée
+## 11) Suite recommandée
 
 1. Documenter précisément les stores `catalogue` et `meta`.
 2. Cartographier `unified_api.py` et les responsabilités réelles de chaque vue.
