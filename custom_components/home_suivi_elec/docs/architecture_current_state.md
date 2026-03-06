@@ -172,6 +172,12 @@ Les vues d’enrichissement et d’export montrent qu’une partie importante de
 
 La vue renvoie ensuite un état de prévisualisation avec `per_source`, `to_create`, `already_ok`, `decisions_required` et un résumé quantitatif. Cela confirme que l’enrichissement est déjà pensé comme une **chaîne normalisée de dérivés énergétiques** à partir des capteurs de puissance sélectionnés.
 
+### Enrich apply / diagnose
+
+`EnrichApplyView` montre que l’enrichissement n’est pas resté au stade “prévu”. Il sait déjà tenter une création réelle de helpers Home Assistant via config flows pour `integration` puis `utility_meter`, avec deux modes (`create_helpers` ou `export_yaml`), un `safe_mode`, et une logique `self_heal` pour supprimer des config entries orphelines avant rollback si nécessaire.
+
+`EnrichDiagnoseView` complète ce flux avec une lecture par `base` de l’état du capteur de puissance, du `kwh_total`, des compteurs périodiques, de l’existence en registry/config entry, et de hints de readiness comme “power unknown/unavailable” ou “kWh total encore unknown”. La chaîne enrichissement possède donc déjà un **cycle presque complet preview -> apply -> diagnose**, orienté aide à l’exploitation et récupération d’erreurs, pas seulement génération théorique.
+
 ### Migration export
 
 `MigrationExportView` relit également le pricing et la sélection courante, reconstruit des `base` par capteur, puis génère plusieurs exports YAML :
@@ -183,7 +189,7 @@ La vue renvoie ensuite un état de prévisualisation avec `per_source`, `to_crea
 
 ### Lecture fonctionnelle
 
-Cette couche montre déjà une orientation forte : les helpers HSE attendus sont explicitement nommés, la sélection pricing sert de point d’entrée naturel, et la migration/export sert de pont entre l’existant Home Assistant et le modèle cible HSE. En revanche, la partie coût exportée reste minimale, dépend du contrat `fixed`, et ne constitue pas encore un moteur complet mutualisé pour l’overview.
+Cette couche montre déjà une orientation forte : les helpers HSE attendus sont explicitement nommés, la sélection pricing sert de point d’entrée naturel, et la migration/export sert de pont entre l’existant Home Assistant et le modèle cible HSE. La lecture plus complète des fichiers fait apparaître une nuance importante : le flux enrichissement est déjà assez avancé sur la création et le diagnostic des helpers, alors que la partie coût reste encore minimale, dépend du contrat `fixed`, et ne constitue pas encore un moteur complet mutualisé pour l’overview.
 
 ## 8) Frontend / thème : état actuel
 
