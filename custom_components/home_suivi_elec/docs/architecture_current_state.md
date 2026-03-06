@@ -63,6 +63,16 @@ Le bloc `meta` constitue un second store partagé, distinct du catalogue. Il ser
 - des salles à renommer (`rooms.rename`) ;
 - des suggestions d’affectation de capteurs à une salle (`assignments.suggest_room`).
 
+### Vue meta et validation
+
+`MetaView` confirme que ce bloc est bien le backend source of truth des pages de customisation UI. La vue accepte et normalise des structures souples pour `rooms` et `types` (liste ou dict indexé par id), valide strictement les IDs/noms, valide les `assignments` par `entity_id`, et persiste ensuite le tout dans `meta_store["meta"]` avec `updated_at` et `generated_at`.
+
+Cette lecture montre aussi une séparation intéressante : le store `meta` ne contient pas seulement des suggestions auto, mais bien les décisions durables de customisation utilisateur (`rooms`, `types`, `assignments`, `rules`). On est donc face à un vrai **modèle métier éditable**, pas juste à une projection calculée de Home Assistant.
+
+### Preview sync
+
+`MetaSyncPreviewView` ne recalcule pas elle-même le diff : elle délègue à un callable partagé `meta_sync_tick`, peut demander ou non la persistance (`persist=false`), puis renvoie à la fois le résultat `sync` et l’état courant de `meta_store`. Cela confirme le même motif architectural que pour le catalogue : la vue HTTP sert d’adaptateur mince au-dessus d’une capacité runtime partagée.
+
 ### Règles importantes
 
 - Les IDs de room auto dérivent des `area_id` Home Assistant (`ha_<area_id normalisé>`).
@@ -72,7 +82,7 @@ Le bloc `meta` constitue un second store partagé, distinct du catalogue. Il ser
 
 ### Lecture fonctionnelle
 
-Le store `meta` joue déjà le rôle d’une **couche d’interprétation** entre Home Assistant brut et la représentation métier utilisée par l’UI.
+Le store `meta` joue déjà le rôle d’une **couche d’interprétation et de personnalisation** entre Home Assistant brut et la représentation métier utilisée par l’UI. Comme pour le catalogue, les endpoints ne portent pas la logique profonde : ils exposent, valident et persévèrent un modèle partagé déjà installé dans le runtime.
 
 ## 4) Pricing : rôle actuel
 
