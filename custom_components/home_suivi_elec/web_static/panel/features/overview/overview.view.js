@@ -38,6 +38,11 @@
     return `${v.toFixed(2)} €`;
   }
 
+  function _display_mode(pricing) {
+    const mode = String(pricing?.display_mode || "ttc").toLowerCase();
+    return mode === "ht" ? "ht" : "ttc";
+  }
+
   function _mk_kv(label, value, mono) {
     const row = el("div", "hse_toolbar");
     row.appendChild(el("div", "hse_subtitle", label));
@@ -133,18 +138,21 @@
     }
   }
 
-  function _render_totals_card(container, title, totals) {
+  function _render_totals_card(container, title, totals, display_mode) {
+    const mode = display_mode === "ht" ? "ht" : "ttc";
     const card = el("div", "hse_kpi_card");
     card.appendChild(el("div", "hse_kpi_title", title));
+    card.appendChild(el("div", "hse_subtitle", `Affichage principal: ${mode.toUpperCase()}`));
 
     card.appendChild(_mk_kv("Énergie", _fmt_kwh(totals?.energy_kwh), false));
-    card.appendChild(_mk_kv("Conso TTC", _fmt_eur(totals?.conso_ttc), false));
-    card.appendChild(_mk_kv("Abonnement TTC", _fmt_eur(totals?.subscription_ttc), false));
+    card.appendChild(_mk_kv(`Conso ${mode.toUpperCase()}`, _fmt_eur(mode === "ht" ? totals?.conso_ht : totals?.conso_ttc), false));
+    card.appendChild(
+      _mk_kv(`Abonnement ${mode.toUpperCase()}`, _fmt_eur(mode === "ht" ? totals?.subscription_ht : totals?.subscription_ttc), false)
+    );
 
-    const total_ttc = totals?.total_ttc;
     const total = el("div", "hse_kpi_total");
-    total.appendChild(el("div", "hse_subtitle", "Total TTC"));
-    total.appendChild(el("div", "hse_kpi_total_value", _fmt_eur(total_ttc)));
+    total.appendChild(el("div", "hse_subtitle", `Total ${mode.toUpperCase()}`));
+    total.appendChild(el("div", "hse_kpi_total_value", _fmt_eur(mode === "ht" ? totals?.total_ht : totals?.total_ttc)));
     card.appendChild(total);
 
     container.appendChild(card);
@@ -230,8 +238,9 @@
     card.appendChild(header);
 
     const all = Array.isArray(dash?.per_sensor_costs) ? dash.per_sensor_costs : [];
+    const mode = _display_mode(dash?.pricing || dash?.defaults || {});
 
-    const subtitle = el("div", "hse_subtitle", `${all.length} capteurs · Triés par coût journalier décroissant`);
+    const subtitle = el("div", "hse_subtitle", `${all.length} capteurs · Triés par coût journalier décroissant · mode ${mode.toUpperCase()}`);
     card.appendChild(subtitle);
 
     const input = document.createElement("input");
@@ -319,6 +328,7 @@
     _refresh_live_from_hass(dash, hass);
 
     const pricing = dash.pricing || dash.defaults || {};
+    const display_mode = _display_mode(pricing);
 
     const cardSummary = el("div", "hse_card");
     cardSummary.appendChild(_pill_title("Résumé général"));
@@ -342,6 +352,7 @@
 
     const ct = pricing.contract_type || "fixed";
     cardContract.appendChild(_mk_kv("Type contrat", ct === "hphc" ? "HP / HC" : "Fixe", false));
+    cardContract.appendChild(_mk_kv("Mode affichage", display_mode.toUpperCase(), false));
 
     const sub = pricing.subscription_monthly || {};
     if (sub && (sub.ht != null || sub.ttc != null)) {
@@ -369,18 +380,18 @@
 
     const cardTotals = el("div", "hse_card");
     cardTotals.appendChild(_pill_title("Coûts globaux"));
-    cardTotals.appendChild(el("div", "hse_subtitle", "Consommation + Abonnement (tous capteurs sélectionnés)"));
+    cardTotals.appendChild(el("div", "hse_subtitle", `Consommation + abonnement (tous capteurs sélectionnés), affichage principal en ${display_mode.toUpperCase()}.`));
 
     const totals_grid = el("div", "hse_kpi_grid");
     const totals = dash.totals || {};
-    _render_totals_card(totals_grid, "Semaine", totals.week);
-    _render_totals_card(totals_grid, "Mois", totals.month);
-    _render_totals_card(totals_grid, "Année", totals.year);
+    _render_totals_card(totals_grid, "Semaine", totals.week, display_mode);
+    _render_totals_card(totals_grid, "Mois", totals.month, display_mode);
+    _render_totals_card(totals_grid, "Année", totals.year, display_mode);
     cardTotals.appendChild(totals_grid);
     container.appendChild(cardTotals);
 
     const cum = Array.isArray(dash.cumulative_table) ? dash.cumulative_table : [];
-    _render_table_periods(container, "Capteurs détectés – Puissance cumulée", cum);
+    _render_table_periods(container, "Consommation cumulée estimée (interne)", cum);
 
     if (Array.isArray(dash.reference_table) && dash.reference_table.length) {
       _render_table_periods(container, "Capteur externe de référence", dash.reference_table);

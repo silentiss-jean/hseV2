@@ -14,6 +14,10 @@ from typing import Any
 from homeassistant.components.http import HomeAssistantView
 
 from ...const import API_PREFIX, DOMAIN
+from ...shared_cost_engine import aggregate_sensor_cost_snapshots, build_sensor_cost_snapshot
+
+
+_PERIODS = ("hour", "day", "week", "month", "year")
 
 
 def _num(x: Any) -> float | None:
@@ -53,19 +57,55 @@ def _current_reference_entity_id(catalogue: dict) -> str | None:
     return None
 
 
-def _mk_period_row(period: str) -> dict:
+def _subscription_for_period(pricing: dict[str, Any] | None, period: str) -> tuple[float | None, float | None]:
+    if not isinstance(pricing, dict):
+        return None, None
+    monthly = pricing.get("subscription_monthly")
+    if not isinstance(monthly, dict):
+        return None, None
+
+    ht = _num(monthly.get("ht"))
+    ttc = _num(monthly.get("ttc"))
+    if ht is None or ttc is None:
+        return None, None
+
+    if period == "month":
+        return ht, ttc
+    if period == "year":
+        return ht * 12.0, ttc * 12.0
+    if period == "week":
+        return (ht * 12.0) / 52.0, (ttc * 12.0) / 52.0
+    return None, None
+
+
+def _mk_period_row(period: str, agg: dict[str, dict[str, float | None]], pricing: dict[str, Any] | None) -> dict:
+    cur = agg.get(period) if isinstance(agg, dict) else {}
+    cost_ht = cur.get("conso_ht") if isinstance(cur, dict) else None
+    cost_ttc = cur.get("conso_ttc") if isinstance(cur, dict) else None
+    kwh = cur.get("energy_kwh") if isinstance(cur, dict) else None
+
+    subscription_ht, subscription_ttc = _subscription_for_period(pricing, period)
+
+    total_ht = None
+    if cost_ht is not None:
+        total_ht = float(cost_ht) + float(subscription_ht or 0.0)
+
+    total_ttc = None
+    if cost_ttc is not None:
+        total_ttc = float(cost_ttc) + float(subscription_ttc or 0.0)
+
     return {
         "period": period,
-        "kwh": None,
-        "cost_ht": None,
-        "cost_ttc": None,
-        "total_ht": None,
-        "total_ttc": None,
+        "kwh": kwh,
+        "cost_ht": cost_ht,
+        "cost_ttc": cost_ttc,
+        "total_ht": total_ht,
+        "total_ttc": total_ttc,
     }
 
 
-def _mk_empty_period_table() -> list[dict]:
-    return [_mk_period_row(p) for p in ("hour", "day", "week", "month", "year")]
+def _mk_period_table(agg: dict[str, dict[str, float | None]], pricing: dict[str, Any] | None) -> list[dict]:
+    return [_mk_period_row(period, agg, pricing) for period in _PERIODS]
 
 
 def _meta_sync_summary(domain_data: dict) -> dict:
@@ -107,6 +147,9 @@ class DashboardOverviewView(HomeAssistantView):
         settings = catalogue.get("settings") or {}
         pricing = settings.get("pricing") if isinstance(settings, dict) else None
         defaults = settings.get("pricing_defaults") if isinstance(settings, dict) else None
+        display_mode = pricing.get("display_mode") if isinstance(pricing, dict) else "ttc"
+        if display_mode not in ("ht", "ttc"):
+            display_mode = "ttc"
 
         cost_ids: list[str] = []
         if isinstance(pricing, dict):
@@ -115,6 +158,10 @@ class DashboardOverviewView(HomeAssistantView):
                 cost_ids = [x for x in cids if isinstance(x, str) and x]
 
         warnings: list[str] = []
+        if not pricing:
+            warnings.append("pricing_not_configured")
+        elif not cost_ids:
+            warnings.append("pricing_has_no_cost_entity_ids")
 
         selected: list[dict] = []
         for eid in cost_ids:
@@ -162,28 +209,48 @@ class DashboardOverviewView(HomeAssistantView):
         else:
             warnings.append("no_reference_configured")
 
-        totals = {
-            "week": {"energy_kwh": None, "conso_ht": None, "conso_ttc": None, "subscription_ht": None, "subscription_ttc": None, "total_ht": None, "total_ttc": None},
-            "month": {"energy_kwh": None, "conso_ht": None, "conso_ttc": None, "subscription_ht": None, "subscription_ttc": None, "total_ht": None, "total_ttc": None},
-            "year": {"energy_kwh": None, "conso_ht": None, "conso_ttc": None, "subscription_ht": None, "subscription_ttc": None, "total_ht": None, "total_ttc": None},
-        }
+        sensor_snapshots = [build_sensor_cost_snapshot(hass, pricing, eid) for eid in cost_ids]
+        aggregate = aggregate_sensor_cost_snapshots(sensor_snapshots)
 
-        cumulative_table = _mk_empty_period_table()
-        reference_table = _mk_empty_period_table() if reference else []
-        delta_table = _mk_empty_period_table() if reference else []
+        for snap in sensor_snapshots:
+            for warning in snap.get("warnings") or []:
+                warnings.append(f"{snap.get('entity_id')}:{warning}")
 
-        per_sensor_costs = [
-            {
-                "entity_id": r["entity_id"],
-                "name": r.get("name") or r["entity_id"],
-                "hour": None,
-                "day": None,
-                "week": None,
-                "month": None,
-                "year": None,
+        totals = {}
+        for period in ("week", "month", "year"):
+            cur = aggregate.get(period) or {}
+            subscription_ht, subscription_ttc = _subscription_for_period(pricing, period)
+            conso_ht = cur.get("conso_ht")
+            conso_ttc = cur.get("conso_ttc")
+            totals[period] = {
+                "energy_kwh": cur.get("energy_kwh"),
+                "conso_ht": conso_ht,
+                "conso_ttc": conso_ttc,
+                "subscription_ht": subscription_ht,
+                "subscription_ttc": subscription_ttc,
+                "total_ht": None if conso_ht is None else float(conso_ht) + float(subscription_ht or 0.0),
+                "total_ttc": None if conso_ttc is None else float(conso_ttc) + float(subscription_ttc or 0.0),
             }
-            for r in selected
-        ]
+
+        cumulative_table = _mk_period_table(aggregate, pricing)
+        reference_table = []
+        delta_table = []
+
+        per_sensor_costs = []
+        for snap in sensor_snapshots:
+            cost_map = snap.get("cost_ht") if display_mode == "ht" else snap.get("cost_ttc")
+            cost_map = cost_map if isinstance(cost_map, dict) else {}
+            per_sensor_costs.append(
+                {
+                    "entity_id": snap.get("entity_id"),
+                    "name": snap.get("name") or snap.get("entity_id"),
+                    "hour": cost_map.get("hour"),
+                    "day": cost_map.get("day"),
+                    "week": cost_map.get("week"),
+                    "month": cost_map.get("month"),
+                    "year": cost_map.get("year"),
+                }
+            )
 
         if selected and all((r.get("power_w") is None) for r in selected):
             warnings.append("selected_sensors_have_no_numeric_state")
@@ -207,6 +274,6 @@ class DashboardOverviewView(HomeAssistantView):
                 "delta_table": delta_table,
                 "per_sensor_costs": per_sensor_costs,
                 "meta_sync": meta_sync,
-                "warnings": warnings,
+                "warnings": sorted(set(warnings)),
             }
         )
