@@ -43,6 +43,12 @@
     return mode === "ht" ? "ht" : "ttc";
   }
 
+  function _view_mode(pricing) {
+    const saved = String(_ls_get("hse_overview_tax_mode") || "").toLowerCase();
+    if (saved === "ht" || saved === "ttc") return saved;
+    return _display_mode(pricing);
+  }
+
   function _mk_kv(label, value, mono) {
     const row = el("div", "hse_toolbar");
     row.appendChild(el("div", "hse_subtitle", label));
@@ -138,20 +144,45 @@
     }
   }
 
-  function _render_totals_card(container, title, totals, display_mode) {
-    const mode = display_mode === "ht" ? "ht" : "ttc";
+  function _row_cost(row, mode) {
+    return mode === "ht" ? row?.cost_ht : row?.cost_ttc;
+  }
+
+  function _row_subscription(row, mode) {
+    return mode === "ht" ? row?.subscription_ht : row?.subscription_ttc;
+  }
+
+  function _row_total(row, mode) {
+    return mode === "ht" ? row?.total_ht : row?.total_ttc;
+  }
+
+  function _mk_mode_switch(active_mode, onChange) {
+    const wrap = el("div", "hse_card_actions");
+    const btnHt = el("button", "hse_button", "Vue HT");
+    const btnTtc = el("button", "hse_button", "Vue TTC");
+
+    btnHt.disabled = active_mode === "ht";
+    btnTtc.disabled = active_mode === "ttc";
+
+    btnHt.addEventListener("click", () => onChange("ht"));
+    btnTtc.addEventListener("click", () => onChange("ttc"));
+
+    wrap.appendChild(btnHt);
+    wrap.appendChild(btnTtc);
+    return wrap;
+  }
+
+  function _render_totals_card(container, title, totals, mode) {
     const card = el("div", "hse_kpi_card");
     card.appendChild(el("div", "hse_kpi_title", title));
-    card.appendChild(el("div", "hse_subtitle", `Affichage principal: ${mode.toUpperCase()}`));
+    card.appendChild(el("div", "hse_subtitle", `Vue ${mode.toUpperCase()}`));
 
     card.appendChild(_mk_kv("Énergie", _fmt_kwh(totals?.energy_kwh), false));
-    card.appendChild(_mk_kv(`Conso ${mode.toUpperCase()}`, _fmt_eur(mode === "ht" ? totals?.conso_ht : totals?.conso_ttc), false));
-    card.appendChild(
-      _mk_kv(`Abonnement ${mode.toUpperCase()}`, _fmt_eur(mode === "ht" ? totals?.subscription_ht : totals?.subscription_ttc), false)
-    );
+    card.appendChild(_mk_kv("Coût consommation", _fmt_eur(mode === "ht" ? totals?.conso_ht : totals?.conso_ttc), false));
+    card.appendChild(_mk_kv("Coût abonnement", _fmt_eur(mode === "ht" ? totals?.subscription_ht : totals?.subscription_ttc), false));
 
     const total = el("div", "hse_kpi_total");
-    total.appendChild(el("div", "hse_subtitle", `Total ${mode.toUpperCase()}`));
+    total.appendChild(el("div", "hse_subtitle", "Total"));
     total.appendChild(el("div", "hse_kpi_total_value", _fmt_eur(mode === "ht" ? totals?.total_ht : totals?.total_ttc)));
     card.appendChild(total);
 
@@ -195,9 +226,10 @@
     container.appendChild(card);
   }
 
-  function _render_table_periods(container, title, rows) {
+  function _render_table_periods(container, title, rows, mode, footerText) {
     const card = el("div", "hse_card");
     card.appendChild(_pill_title(title));
+    card.appendChild(el("div", "hse_subtitle", `Vue ${mode.toUpperCase()} · consommation, abonnement et total.`));
 
     if (!rows.length) {
       card.appendChild(el("div", "hse_subtitle", "—"));
@@ -209,17 +241,20 @@
       _mk_table(rows, [
         { label: "Période", value: (r) => r.period },
         { label: "kWh", value: (r) => (r.kwh == null ? "—" : String(_num(r.kwh)?.toFixed(3) ?? "—")) },
-        { label: "Coût consommation HT (€)", value: (r) => _fmt_eur(r.cost_ht) },
-        { label: "Coût consommation TTC (€)", value: (r) => _fmt_eur(r.cost_ttc) },
-        { label: "Total HT (€)", value: (r) => _fmt_eur(r.total_ht) },
-        { label: "Total TTC (€)", value: (r) => _fmt_eur(r.total_ttc) },
+        { label: "Coût consommation (€)", value: (r) => _fmt_eur(_row_cost(r, mode)) },
+        { label: "Coût abonnement (€)", value: (r) => _fmt_eur(_row_subscription(r, mode)) },
+        { label: "Total (€)", value: (r) => _fmt_eur(_row_total(r, mode)) },
       ])
     );
+
+    if (footerText) {
+      card.appendChild(el("div", "hse_subtitle", footerText));
+    }
 
     container.appendChild(card);
   }
 
-  function _render_costs_per_sensor(container, dash) {
+  function _render_costs_per_sensor(container, dash, mode) {
     const card = el("div", "hse_card");
 
     const state = {
@@ -238,9 +273,7 @@
     card.appendChild(header);
 
     const all = Array.isArray(dash?.per_sensor_costs) ? dash.per_sensor_costs : [];
-    const mode = _display_mode(dash?.pricing || dash?.defaults || {});
-
-    const subtitle = el("div", "hse_subtitle", `${all.length} capteurs · Triés par coût journalier décroissant · mode ${mode.toUpperCase()}`);
+    const subtitle = el("div", "hse_subtitle", `${all.length} capteurs · Triés par coût journalier décroissant · vue ${mode.toUpperCase()}`);
     card.appendChild(subtitle);
 
     const input = document.createElement("input");
@@ -270,7 +303,12 @@
         ? all.filter((r) => String(r.name || r.entity_id || "").toLowerCase().includes(q))
         : all.slice();
 
-      filtered.sort((a, b) => (_num(b.day) || -1e9) - (_num(a.day) || -1e9));
+      const getCost = (r, period) => {
+        const costMap = mode === "ht" ? r.cost_ht : r.cost_ttc;
+        return costMap && typeof costMap === "object" ? costMap[period] : null;
+      };
+
+      filtered.sort((a, b) => (_num(getCost(b, "day")) || -1e9) - (_num(getCost(a, "day")) || -1e9));
 
       if (!filtered.length) {
         host.appendChild(el("div", "hse_subtitle", "Aucun résultat."));
@@ -293,10 +331,10 @@
               return wrap;
             },
           },
-          { label: "Jour (€)", value: (r) => _fmt_eur(r.day) },
-          { label: "Semaine (€)", value: (r) => _fmt_eur(r.week) },
-          { label: "Mois (€)", value: (r) => _fmt_eur(r.month) },
-          { label: "Année (€)", value: (r) => _fmt_eur(r.year) },
+          { label: "Jour (€)", value: (r) => _fmt_eur(getCost(r, "day")) },
+          { label: "Semaine (€)", value: (r) => _fmt_eur(getCost(r, "week")) },
+          { label: "Mois (€)", value: (r) => _fmt_eur(getCost(r, "month")) },
+          { label: "Année (€)", value: (r) => _fmt_eur(getCost(r, "year")) },
         ])
       );
 
@@ -328,10 +366,19 @@
     _refresh_live_from_hass(dash, hass);
 
     const pricing = dash.pricing || dash.defaults || {};
-    const display_mode = _display_mode(pricing);
+    const default_mode = _display_mode(pricing);
+    const active_mode = _view_mode(pricing);
+    const rerenderWithMode = (mode) => {
+      _ls_set("hse_overview_tax_mode", mode);
+      render_overview(container, data, hass);
+    };
 
     const cardSummary = el("div", "hse_card");
-    cardSummary.appendChild(_pill_title("Résumé général"));
+    const summaryHeader = el("div", "hse_card_header");
+    summaryHeader.appendChild(_pill_title("Résumé général"));
+    summaryHeader.appendChild(_mk_mode_switch(active_mode, rerenderWithMode));
+    cardSummary.appendChild(summaryHeader);
+    cardSummary.appendChild(el("div", "hse_subtitle", `Vue des coûts: ${active_mode.toUpperCase()} · mode par défaut configuré: ${default_mode.toUpperCase()}.`));
 
     const grid = el("div", "hse_grid_2col");
 
@@ -348,16 +395,16 @@
     }
 
     const cardContract = el("div", "hse_card hse_card_compact");
-    cardContract.appendChild(el("div", "hse_kpi_title", "Résumé général"));
+    cardContract.appendChild(el("div", "hse_kpi_title", "Résumé contrat"));
 
     const ct = pricing.contract_type || "fixed";
     cardContract.appendChild(_mk_kv("Type contrat", ct === "hphc" ? "HP / HC" : "Fixe", false));
-    cardContract.appendChild(_mk_kv("Mode affichage", display_mode.toUpperCase(), false));
+    cardContract.appendChild(_mk_kv("Vue active", active_mode.toUpperCase(), false));
 
     const sub = pricing.subscription_monthly || {};
     if (sub && (sub.ht != null || sub.ttc != null)) {
-      cardContract.appendChild(_mk_kv("Abonnement HT", _fmt_eur(sub.ht), false));
-      cardContract.appendChild(_mk_kv("Abonnement TTC", _fmt_eur(sub.ttc), false));
+      cardContract.appendChild(_mk_kv("Abonnement mensuel HT", _fmt_eur(sub.ht), false));
+      cardContract.appendChild(_mk_kv("Abonnement mensuel TTC", _fmt_eur(sub.ttc), false));
     }
 
     const fixed = pricing.fixed_energy_per_kwh || {};
@@ -380,41 +427,34 @@
 
     const cardTotals = el("div", "hse_card");
     cardTotals.appendChild(_pill_title("Coûts globaux"));
-    cardTotals.appendChild(el("div", "hse_subtitle", `Consommation + abonnement (tous capteurs sélectionnés), affichage principal en ${display_mode.toUpperCase()}.`));
+    cardTotals.appendChild(el("div", "hse_subtitle", `Consommation + abonnement (tous capteurs sélectionnés), vue ${active_mode.toUpperCase()}.`));
 
     const totals_grid = el("div", "hse_kpi_grid");
     const totals = dash.totals || {};
-    _render_totals_card(totals_grid, "Semaine", totals.week, display_mode);
-    _render_totals_card(totals_grid, "Mois", totals.month, display_mode);
-    _render_totals_card(totals_grid, "Année", totals.year, display_mode);
+    _render_totals_card(totals_grid, "Semaine", totals.week, active_mode);
+    _render_totals_card(totals_grid, "Mois", totals.month, active_mode);
+    _render_totals_card(totals_grid, "Année", totals.year, active_mode);
     cardTotals.appendChild(totals_grid);
     container.appendChild(cardTotals);
 
     const cum = Array.isArray(dash.cumulative_table) ? dash.cumulative_table : [];
-    _render_table_periods(container, "Consommation cumulée estimée (interne)", cum);
+    _render_table_periods(container, "Consommation cumulée estimée (interne)", cum, active_mode);
 
     if (Array.isArray(dash.reference_table) && dash.reference_table.length) {
-      _render_table_periods(container, "Capteur externe de référence", dash.reference_table);
+      _render_table_periods(container, "Capteur externe de référence", dash.reference_table, active_mode);
     }
 
     if (Array.isArray(dash.delta_table) && dash.delta_table.length) {
-      const card = el("div", "hse_card");
-      card.appendChild(_pill_title("Delta (externe - interne)"));
-      card.appendChild(
-        _mk_table(dash.delta_table, [
-          { label: "Période", value: (r) => r.period },
-          { label: "kWh", value: (r) => (r.kwh == null ? "—" : String(_num(r.kwh)?.toFixed(3) ?? "—")) },
-          { label: "Coût consommation HT (€)", value: (r) => _fmt_eur(r.cost_ht) },
-          { label: "Coût consommation TTC (€)", value: (r) => _fmt_eur(r.cost_ttc) },
-          { label: "Total HT (€)", value: (r) => _fmt_eur(r.total_ht) },
-          { label: "Total TTC (€)", value: (r) => _fmt_eur(r.total_ttc) },
-        ])
+      _render_table_periods(
+        container,
+        "Delta (externe - interne)",
+        dash.delta_table,
+        active_mode,
+        "Le coût abonnement du delta reste généralement nul quand la même base d'abonnement est utilisée des deux côtés."
       );
-      card.appendChild(el("div", "hse_subtitle", "Les totaux incluent l'abonnement mensuel proratisé sur chaque période."));
-      container.appendChild(card);
     }
 
-    _render_costs_per_sensor(container, dash);
+    _render_costs_per_sensor(container, dash, active_mode);
 
     if (Array.isArray(dash.warnings) && dash.warnings.length) {
       const card = el("div", "hse_card");

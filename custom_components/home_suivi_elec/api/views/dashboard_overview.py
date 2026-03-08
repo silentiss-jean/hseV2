@@ -100,13 +100,24 @@ def _subscription_for_period(pricing: dict[str, Any] | None, period: str) -> tup
     return None, None
 
 
+def _coerce_subscription_for_display(value: float | None, *, has_row_data: bool) -> float | None:
+    if value is not None:
+        return float(value)
+    if has_row_data:
+        return 0.0
+    return None
+
+
 def _mk_period_row(period: str, agg: dict[str, dict[str, float | None]], pricing: dict[str, Any] | None) -> dict:
     cur = agg.get(period) if isinstance(agg, dict) else {}
     cost_ht = cur.get("conso_ht") if isinstance(cur, dict) else None
     cost_ttc = cur.get("conso_ttc") if isinstance(cur, dict) else None
     kwh = cur.get("energy_kwh") if isinstance(cur, dict) else None
 
+    has_row_data = any(v is not None for v in (kwh, cost_ht, cost_ttc))
     subscription_ht, subscription_ttc = _subscription_for_period(pricing, period)
+    subscription_ht = _coerce_subscription_for_display(subscription_ht, has_row_data=has_row_data)
+    subscription_ttc = _coerce_subscription_for_display(subscription_ttc, has_row_data=has_row_data)
 
     total_ht = None
     if cost_ht is not None:
@@ -121,6 +132,8 @@ def _mk_period_row(period: str, agg: dict[str, dict[str, float | None]], pricing
         "kwh": kwh,
         "cost_ht": cost_ht,
         "cost_ttc": cost_ttc,
+        "subscription_ht": subscription_ht,
+        "subscription_ttc": subscription_ttc,
         "total_ht": total_ht,
         "total_ttc": total_ttc,
     }
@@ -164,6 +177,10 @@ def _build_delta_period_table(
         delta_sub_ht = _sub_opt(ref_sub_ht, int_sub_ht)
         delta_sub_ttc = _sub_opt(ref_sub_ttc, int_sub_ttc)
 
+        has_row_data = any(v is not None for v in (kwh, cost_ht, cost_ttc))
+        delta_sub_ht = _coerce_subscription_for_display(delta_sub_ht, has_row_data=has_row_data)
+        delta_sub_ttc = _coerce_subscription_for_display(delta_sub_ttc, has_row_data=has_row_data)
+
         total_ht = None if cost_ht is None else float(cost_ht) + float(delta_sub_ht or 0.0)
         total_ttc = None if cost_ttc is None else float(cost_ttc) + float(delta_sub_ttc or 0.0)
 
@@ -173,6 +190,8 @@ def _build_delta_period_table(
                 "kwh": kwh,
                 "cost_ht": cost_ht,
                 "cost_ttc": cost_ttc,
+                "subscription_ht": delta_sub_ht,
+                "subscription_ttc": delta_sub_ttc,
                 "total_ht": total_ht,
                 "total_ttc": total_ttc,
             }
@@ -322,17 +341,12 @@ class DashboardOverviewView(HomeAssistantView):
 
         per_sensor_costs = []
         for snap in sensor_snapshots:
-            cost_map = snap.get("cost_ht") if display_mode == "ht" else snap.get("cost_ttc")
-            cost_map = cost_map if isinstance(cost_map, dict) else {}
             per_sensor_costs.append(
                 {
                     "entity_id": snap.get("entity_id"),
                     "name": snap.get("name") or snap.get("entity_id"),
-                    "hour": cost_map.get("hour"),
-                    "day": cost_map.get("day"),
-                    "week": cost_map.get("week"),
-                    "month": cost_map.get("month"),
-                    "year": cost_map.get("year"),
+                    "cost_ht": snap.get("cost_ht") if isinstance(snap.get("cost_ht"), dict) else {},
+                    "cost_ttc": snap.get("cost_ttc") if isinstance(snap.get("cost_ttc"), dict) else {},
                 }
             )
 
