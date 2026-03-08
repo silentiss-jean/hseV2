@@ -18,6 +18,11 @@ HSE_MAINTENANCE: If you change endpoints here, update config_api.md.
     });
   }
 
+  async function get_reference_total_status(hass, entity_id) {
+    const suffix = entity_id ? `?entity_id=${encodeURIComponent(entity_id)}` : "";
+    return hass.callApi("GET", `home_suivi_elec/unified/catalogue/reference_total/status${suffix}`);
+  }
+
   async function fetch_pricing(hass) {
     return hass.callApi("GET", "home_suivi_elec/unified/settings/pricing");
   }
@@ -34,6 +39,7 @@ HSE_MAINTENANCE: If you change endpoints here, update config_api.md.
     fetch_catalogue,
     refresh_catalogue,
     set_reference_total,
+    get_reference_total_status,
     fetch_pricing,
     set_pricing,
     clear_pricing,
