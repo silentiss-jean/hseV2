@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime, timezone
 
 from homeassistant.components.http import HomeAssistantView
@@ -12,6 +13,13 @@ from ...scan_engine import detect_kind
 from ...time_utils import utc_now_iso
 from .enrich_preview import derive_base_slug
 from .migration_export import _mk_integration_sensor_yaml, _mk_utility_meter_yaml, _safe_yaml
+
+_HELPER_SYNC_ATTEMPTS = 3
+_HELPER_SYNC_RETRY_DELAYS_S = (1.0, 1.5)
+_HELPER_BG_MAX_PASSES = 8
+_HELPER_BG_DELAY_S = 5.0
+_HELPER_TASKS_KEY = "energy_helper_workflow_tasks"
+_HELPER_WORKFLOW_SLOT = "helper_enrichment"
 
 
 def _admin_only(request) -> bool:
@@ -194,6 +202,140 @@ def _persist_energy_helper_mapping(*, catalogue: dict | None, power_entity_id: s
     return True
 
 
+def _energy_mapping_from_item(item: dict | None) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    derived = item.get("derived") or {}
+    helpers = derived.get("helpers") or {}
+    mapping = helpers.get("energy")
+    return mapping if isinstance(mapping, dict) else None
+
+
+def _workflow_slot(item: dict, slot_name: str = _HELPER_WORKFLOW_SLOT) -> dict:
+    workflow = item.setdefault("workflow", {})
+    if not isinstance(workflow, dict):
+        workflow = {}
+        item["workflow"] = workflow
+
+    slot = workflow.setdefault(slot_name, {})
+    if not isinstance(slot, dict):
+        slot = {}
+        workflow[slot_name] = slot
+    return slot
+
+
+def _build_helper_status_payload(*, item_id: str | None, entity_id: str | None, workflow: dict | None, mapping: dict | None) -> dict:
+    wf = workflow if isinstance(workflow, dict) else {}
+    return {
+        "job_id": wf.get("job_id"),
+        "entity_id": entity_id,
+        "item_id": item_id,
+        "status": wf.get("status") or "idle",
+        "progress_phase": wf.get("progress_phase") or "idle",
+        "progress_label": wf.get("progress_label") or "Aucun enrichissement en cours.",
+        "attempt": wf.get("attempt") or 0,
+        "attempts_total": wf.get("attempts_total") or _HELPER_SYNC_ATTEMPTS,
+        "will_retry": bool(wf.get("will_retry")),
+        "retry_scheduled": bool(wf.get("retry_scheduled")),
+        "done": bool(wf.get("done")),
+        "last_error": wf.get("last_error"),
+        "updated_at": wf.get("updated_at"),
+        "started_at": wf.get("started_at"),
+        "finished_at": wf.get("finished_at"),
+        "mapping": mapping,
+    }
+
+
+def _set_helper_workflow_state(
+    *,
+    item: dict,
+    item_id: str,
+    entity_id: str | None,
+    status: str,
+    progress_phase: str,
+    progress_label: str,
+    attempt: int,
+    attempts_total: int,
+    will_retry: bool,
+    retry_scheduled: bool,
+    last_error: str | None = None,
+    mapping: dict | None = None,
+    done: bool | None = None,
+    job_id: str | None = None,
+    slot_name: str = _HELPER_WORKFLOW_SLOT,
+) -> dict:
+    slot = _workflow_slot(item, slot_name=slot_name)
+    now = utc_now_iso()
+
+    slot["job_id"] = job_id or slot.get("job_id") or str(uuid.uuid4())
+    slot["status"] = status
+    slot["progress_phase"] = progress_phase
+    slot["progress_label"] = progress_label
+    slot["attempt"] = attempt
+    slot["attempts_total"] = attempts_total
+    slot["will_retry"] = bool(will_retry)
+    slot["retry_scheduled"] = bool(retry_scheduled)
+    slot["last_error"] = last_error
+    slot["updated_at"] = now
+    slot["started_at"] = slot.get("started_at") or now
+    slot["done"] = status in ("ready", "failed") if done is None else bool(done)
+
+    if mapping is not None:
+        slot["mapping"] = mapping
+
+    if slot["done"]:
+        slot["finished_at"] = now
+    else:
+        slot.pop("finished_at", None)
+
+    return _build_helper_status_payload(
+        item_id=item_id,
+        entity_id=entity_id,
+        workflow=slot,
+        mapping=mapping if mapping is not None else slot.get("mapping"),
+    )
+
+
+async def _save_catalogue_if_possible(hass) -> None:
+    domain_data = hass.data.get(DOMAIN, {})
+    saver = domain_data.get("catalogue_save")
+    if saver:
+        await saver()
+
+
+def _task_registry(hass) -> dict:
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    registry = domain_data.get(_HELPER_TASKS_KEY)
+    if not isinstance(registry, dict):
+        registry = {}
+        domain_data[_HELPER_TASKS_KEY] = registry
+    return registry
+
+
+def _cancel_helper_task(hass, entity_id: str | None) -> None:
+    if not entity_id:
+        return
+    task = _task_registry(hass).pop(entity_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def _schedule_helper_task(*, hass, catalogue: dict, item_id: str, power_entity_id: str, safe_mode: bool, self_heal: bool, job_id: str) -> None:
+    _cancel_helper_task(hass, power_entity_id)
+    task = hass.async_create_task(
+        _run_background_helper_enrichment(
+            hass=hass,
+            catalogue=catalogue,
+            item_id=item_id,
+            power_entity_id=power_entity_id,
+            safe_mode=safe_mode,
+            self_heal=self_heal,
+            job_id=job_id,
+        )
+    )
+    _task_registry(hass)[power_entity_id] = task
+
+
 async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[dict]) -> dict:
     """Best-effort helper creation via config flows."""
 
@@ -202,9 +344,6 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
         return {"ok": False, "error": "config_entries_flow_not_available"}
 
     last_err = None
-
-    # Built-in helper config flows (integration, utility_meter) are meant to be created
-    # via the UI (source=user). Some of them do NOT support source=import.
     sources = ("user",)
 
     for data in data_variants:
@@ -212,7 +351,6 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
             try:
                 res = await flow_mgr.async_init(domain, context={"source": src}, data=data)
 
-                # Some flows return a form; try to auto-configure if possible.
                 if isinstance(res, dict) and res.get("type") == "form" and res.get("flow_id"):
                     try:
                         res = await flow_mgr.async_configure(res["flow_id"], user_input=data)
@@ -225,7 +363,6 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
 
                 if isinstance(res, dict) and res.get("type") == "abort":
                     reason = res.get("reason") or "unknown"
-                    # Treat already_configured as a non-error outcome.
                     if reason in ("already_configured", "single_instance_allowed"):
                         return {"ok": True, "result": res, "used_data": data, "already_configured": True}
                     last_err = f"flow_abort:{src}:{reason}"
@@ -236,6 +373,688 @@ async def _try_create_helper_via_flow(*, hass, domain: str, data_variants: list[
                 last_err = f"flow_init_failed:{src}:{type(exc).__name__}:{exc}"
 
     return {"ok": False, "error": last_err or "unknown"}
+
+
+async def _ensure_energy_helpers_once(*, hass, catalogue: dict | None, power_entity_id: str, safe_mode: bool, self_heal: bool) -> dict:
+    ent_reg = er.async_get(hass)
+    created: list[dict] = []
+    skipped: list[dict] = []
+    errors: list[dict] = []
+
+    st = hass.states.get(power_entity_id)
+    attrs = st.attributes if st else {}
+    unit = (attrs or {}).get("unit_of_measurement")
+    device_class = (attrs or {}).get("device_class")
+    kind = detect_kind(device_class, unit)
+    if kind != "power":
+        return {
+            "ok": False,
+            "error": f"skip_kind:{kind}",
+            "entity_id": power_entity_id,
+            "created": created,
+            "skipped": [{"entity_id": power_entity_id, "reason": f"skip_kind:{kind}", "hint": "Sélectionne un capteur de puissance (W/kW)."}],
+            "errors": errors,
+        }
+
+    try:
+        base = derive_base_slug(power_entity_id)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "error": f"base_slug:{exc}",
+            "entity_id": power_entity_id,
+            "created": created,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
+    helper_entity_ids = _energy_helper_entity_ids(base)
+    total_eid = helper_entity_ids["total"]
+    total_name = f"{base}_kwh_total"
+
+    power_value = _as_float_state(st.state if st else None)
+    if safe_mode and power_value is None:
+        mapping = _build_energy_helper_mapping(
+            hass=hass,
+            ent_reg=ent_reg,
+            power_entity_id=power_entity_id,
+            helper_entity_ids=helper_entity_ids,
+        )
+        persisted = _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_entity_id, mapping=mapping)
+        if not persisted:
+            errors.append({
+                "entity_id": power_entity_id,
+                "kind": "catalogue",
+                "base": base,
+                "error": "catalogue_item_not_found_for_helper_mapping",
+            })
+        skipped.append(
+            {
+                "entity_id": power_entity_id,
+                "base": base,
+                "reason": "power_not_ready",
+                "hint": "Le capteur de puissance est unknown/unavailable. Attends une première mesure (allume une charge) puis relance.",
+            }
+        )
+        return {
+            "ok": False,
+            "error": "power_not_ready",
+            "entity_id": power_entity_id,
+            "base": base,
+            "created": created,
+            "skipped": skipped,
+            "errors": errors,
+            "mapping": mapping,
+        }
+
+    reg_entry = ent_reg.async_get(total_eid)
+    if hass.states.get(total_eid) is None and reg_entry is None:
+        if _has_config_entry_named(hass, domain="integration", name=total_name):
+            if self_heal:
+                removed = await _remove_config_entry_if_present(hass, domain="integration", name=total_name)
+                if removed:
+                    skipped.append({"entity_id": total_eid, "reason": "self_heal_removed_stale_entry", "kind": "integration"})
+                else:
+                    mapping = _build_energy_helper_mapping(
+                        hass=hass,
+                        ent_reg=ent_reg,
+                        power_entity_id=power_entity_id,
+                        helper_entity_ids=helper_entity_ids,
+                    )
+                    persisted = _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_entity_id, mapping=mapping)
+                    errors.append(
+                        {
+                            "entity_id": total_eid,
+                            "kind": "integration",
+                            "base": base,
+                            "error": "config_entry_exists_but_entity_missing",
+                            "hint": "Une config entry existe mais l'entité est absente. Va dans Settings → Devices & services → Helpers et supprime l'entrée, ou utilise enrich/cleanup.",
+                        }
+                    )
+                    if not persisted:
+                        errors.append({
+                            "entity_id": power_entity_id,
+                            "kind": "catalogue",
+                            "base": base,
+                            "error": "catalogue_item_not_found_for_helper_mapping",
+                        })
+                    return {
+                        "ok": False,
+                        "error": "integration_config_entry_exists_but_entity_missing",
+                        "entity_id": power_entity_id,
+                        "base": base,
+                        "created": created,
+                        "skipped": skipped,
+                        "errors": errors,
+                        "mapping": mapping,
+                    }
+            else:
+                mapping = _build_energy_helper_mapping(
+                    hass=hass,
+                    ent_reg=ent_reg,
+                    power_entity_id=power_entity_id,
+                    helper_entity_ids=helper_entity_ids,
+                )
+                persisted = _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_entity_id, mapping=mapping)
+                errors.append(
+                    {
+                        "entity_id": total_eid,
+                        "kind": "integration",
+                        "base": base,
+                        "error": "config_entry_exists_but_entity_missing",
+                    }
+                )
+                if not persisted:
+                    errors.append({
+                        "entity_id": power_entity_id,
+                        "kind": "catalogue",
+                        "base": base,
+                        "error": "catalogue_item_not_found_for_helper_mapping",
+                    })
+                return {
+                    "ok": False,
+                    "error": "integration_config_entry_exists_but_entity_missing",
+                    "entity_id": power_entity_id,
+                    "base": base,
+                    "created": created,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "mapping": mapping,
+                }
+
+        data_variants = [
+            {"source": power_entity_id, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
+            {"source_entity_id": power_entity_id, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
+            {"source_sensor": power_entity_id, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
+        ]
+        res = await _try_create_helper_via_flow(hass=hass, domain="integration", data_variants=data_variants)
+        if res.get("ok"):
+            if res.get("already_configured"):
+                skipped.append({"entity_id": total_eid, "reason": "already_configured", "flow": res.get("result")})
+            else:
+                created.append({"entity_id": total_eid, "kind": "integration", "base": base, "flow": res.get("result")})
+
+            ok = await _wait_for_entity_or_registry(hass=hass, ent_reg=ent_reg, entity_id=total_eid, timeout_s=6.0)
+            if not ok:
+                if self_heal:
+                    await _remove_config_entry_if_present(hass, domain="integration", name=total_name)
+                mapping = _build_energy_helper_mapping(
+                    hass=hass,
+                    ent_reg=ent_reg,
+                    power_entity_id=power_entity_id,
+                    helper_entity_ids=helper_entity_ids,
+                )
+                persisted = _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_entity_id, mapping=mapping)
+                errors.append(
+                    {
+                        "entity_id": total_eid,
+                        "kind": "integration",
+                        "base": base,
+                        "error": "entity_not_created_after_flow",
+                        "rolled_back": bool(self_heal),
+                        "hint": "L'entité n'a pas été créée après le flow. Vérifie Settings → System → Logs (filtre 'integration').",
+                    }
+                )
+                if not persisted:
+                    errors.append({
+                        "entity_id": power_entity_id,
+                        "kind": "catalogue",
+                        "base": base,
+                        "error": "catalogue_item_not_found_for_helper_mapping",
+                    })
+                return {
+                    "ok": False,
+                    "error": "integration_entity_not_created_after_flow",
+                    "entity_id": power_entity_id,
+                    "base": base,
+                    "created": created,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "mapping": mapping,
+                }
+        else:
+            mapping = _build_energy_helper_mapping(
+                hass=hass,
+                ent_reg=ent_reg,
+                power_entity_id=power_entity_id,
+                helper_entity_ids=helper_entity_ids,
+            )
+            persisted = _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_entity_id, mapping=mapping)
+            errors.append(
+                {
+                    "entity_id": total_eid,
+                    "kind": "integration",
+                    "base": base,
+                    "error": res.get("error"),
+                    "hint": "Échec du config flow. Vérifie Settings → System → Logs.",
+                }
+            )
+            if not persisted:
+                errors.append({
+                    "entity_id": power_entity_id,
+                    "kind": "catalogue",
+                    "base": base,
+                    "error": "catalogue_item_not_found_for_helper_mapping",
+                })
+            return {
+                "ok": False,
+                "error": res.get("error") or "integration_flow_failed",
+                "entity_id": power_entity_id,
+                "base": base,
+                "created": created,
+                "skipped": skipped,
+                "errors": errors,
+                "mapping": mapping,
+            }
+    else:
+        skipped.append({"entity_id": total_eid, "reason": "already_exists_or_registered", "registry": bool(reg_entry)})
+
+    total_state = hass.states.get(total_eid)
+    total_value = _as_float_state(total_state.state if total_state else None)
+    if safe_mode and total_value is None:
+        mapping = _build_energy_helper_mapping(
+            hass=hass,
+            ent_reg=ent_reg,
+            power_entity_id=power_entity_id,
+            helper_entity_ids=helper_entity_ids,
+        )
+        persisted = _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_entity_id, mapping=mapping)
+        skipped.append(
+            {
+                "entity_id": total_eid,
+                "base": base,
+                "reason": "total_not_ready",
+                "hint": "Le compteur kWh total est encore unknown. HSE relancera automatiquement la finalisation des compteurs day/week/month/year.",
+            }
+        )
+        if not persisted:
+            errors.append({
+                "entity_id": power_entity_id,
+                "kind": "catalogue",
+                "base": base,
+                "error": "catalogue_item_not_found_for_helper_mapping",
+            })
+        return {
+            "ok": False,
+            "error": "total_not_ready",
+            "entity_id": power_entity_id,
+            "base": base,
+            "created": created,
+            "skipped": skipped,
+            "errors": errors,
+            "mapping": mapping,
+        }
+
+    for suf, cycle in (("day", "daily"), ("week", "weekly"), ("month", "monthly"), ("year", "yearly")):
+        meter_name = f"{base}_kwh_{suf}"
+        meter_eid = helper_entity_ids[suf]
+        reg_meter = ent_reg.async_get(meter_eid)
+
+        if hass.states.get(meter_eid) is not None or reg_meter is not None:
+            skipped.append({"entity_id": meter_eid, "reason": "already_exists_or_registered", "registry": bool(reg_meter)})
+            continue
+
+        if _has_config_entry_named(hass, domain="utility_meter", name=meter_name):
+            if self_heal:
+                removed = await _remove_config_entry_if_present(hass, domain="utility_meter", name=meter_name)
+                if removed:
+                    skipped.append({"entity_id": meter_eid, "reason": "self_heal_removed_stale_entry", "kind": "utility_meter"})
+                else:
+                    errors.append(
+                        {
+                            "entity_id": meter_eid,
+                            "kind": "utility_meter",
+                            "base": base,
+                            "cycle": cycle,
+                            "error": "config_entry_exists_but_entity_missing",
+                            "hint": "Une config entry existe mais l'entité est absente. Supprime l'entrée dans Helpers, ou utilise enrich/cleanup.",
+                        }
+                    )
+                    continue
+            else:
+                skipped.append({"entity_id": meter_eid, "reason": "config_entry_exists"})
+                continue
+
+        base_payload = {
+            "source": total_eid,
+            "name": meter_name,
+            "cycle": cycle,
+            "offset": 0.0,
+            "tariffs": [],
+            "delta_values": False,
+            "net_consumption": False,
+            "periodically_resetting": False,
+            "always_available": False,
+        }
+        data_variants = [
+            base_payload,
+            {**base_payload, "source_sensor": total_eid},
+            {**base_payload, "source_entity_id": total_eid},
+            {**base_payload, "meter_id": meter_name},
+        ]
+
+        res = await _try_create_helper_via_flow(hass=hass, domain="utility_meter", data_variants=data_variants)
+        if res.get("ok"):
+            if res.get("already_configured"):
+                skipped.append({"entity_id": meter_eid, "reason": "already_configured", "flow": res.get("result")})
+            else:
+                created.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "flow": res.get("result")})
+
+            ok = await _wait_for_entity_or_registry(hass=hass, ent_reg=ent_reg, entity_id=meter_eid, timeout_s=6.0)
+            if not ok:
+                if self_heal:
+                    await _remove_config_entry_if_present(hass, domain="utility_meter", name=meter_name)
+                errors.append(
+                    {
+                        "entity_id": meter_eid,
+                        "kind": "utility_meter",
+                        "base": base,
+                        "cycle": cycle,
+                        "error": "entity_not_created_after_flow",
+                        "rolled_back": bool(self_heal),
+                        "hint": "L'entité n'a pas été créée après le flow. Vérifie Settings → System → Logs (filtre 'utility_meter').",
+                    }
+                )
+                continue
+
+            await hass.async_block_till_done()
+        else:
+            errors.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "error": res.get("error")})
+
+    mapping = _build_energy_helper_mapping(
+        hass=hass,
+        ent_reg=ent_reg,
+        power_entity_id=power_entity_id,
+        helper_entity_ids=helper_entity_ids,
+    )
+    persisted = _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_entity_id, mapping=mapping)
+    if not persisted:
+        errors.append({
+            "entity_id": power_entity_id,
+            "kind": "catalogue",
+            "base": base,
+            "error": "catalogue_item_not_found_for_helper_mapping",
+        })
+
+    return {
+        "ok": mapping.get("status") in ("ready", "partial"),
+        "entity_id": power_entity_id,
+        "base": base,
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "mapping": mapping,
+    }
+
+
+async def _run_background_helper_enrichment(*, hass, catalogue: dict, item_id: str, power_entity_id: str, safe_mode: bool, self_heal: bool, job_id: str) -> None:
+    try:
+        for pass_index in range(1, _HELPER_BG_MAX_PASSES + 1):
+            current_item_id, item = _find_catalogue_item_by_source_entity_id(catalogue, power_entity_id)
+            if not item or current_item_id != item_id:
+                return
+
+            _set_helper_workflow_state(
+                item=item,
+                item_id=item_id,
+                entity_id=power_entity_id,
+                status="running",
+                progress_phase="ensure_total",
+                progress_label="Finalisation des helpers en arrière-plan…",
+                attempt=_HELPER_SYNC_ATTEMPTS,
+                attempts_total=_HELPER_SYNC_ATTEMPTS,
+                will_retry=False,
+                retry_scheduled=True,
+                last_error="total_not_ready",
+                mapping=_energy_mapping_from_item(item),
+                done=False,
+                job_id=job_id,
+            )
+            await _save_catalogue_if_possible(hass)
+
+            result = await _ensure_energy_helpers_once(
+                hass=hass,
+                catalogue=catalogue,
+                power_entity_id=power_entity_id,
+                safe_mode=safe_mode,
+                self_heal=self_heal,
+            )
+            mapping = result.get("mapping") or _energy_mapping_from_item(item)
+
+            if result.get("ok"):
+                _set_helper_workflow_state(
+                    item=item,
+                    item_id=item_id,
+                    entity_id=power_entity_id,
+                    status="ready",
+                    progress_phase="ready",
+                    progress_label="Helpers énergie prêts",
+                    attempt=_HELPER_SYNC_ATTEMPTS,
+                    attempts_total=_HELPER_SYNC_ATTEMPTS,
+                    will_retry=False,
+                    retry_scheduled=False,
+                    last_error=None,
+                    mapping=mapping,
+                    done=True,
+                    job_id=job_id,
+                )
+                await _save_catalogue_if_possible(hass)
+                return
+
+            error = result.get("error")
+            if error != "total_not_ready":
+                _set_helper_workflow_state(
+                    item=item,
+                    item_id=item_id,
+                    entity_id=power_entity_id,
+                    status="failed",
+                    progress_phase="failed",
+                    progress_label="Création des helpers incomplète.",
+                    attempt=_HELPER_SYNC_ATTEMPTS,
+                    attempts_total=_HELPER_SYNC_ATTEMPTS,
+                    will_retry=False,
+                    retry_scheduled=False,
+                    last_error=error,
+                    mapping=mapping,
+                    done=True,
+                    job_id=job_id,
+                )
+                await _save_catalogue_if_possible(hass)
+                return
+
+            if pass_index >= _HELPER_BG_MAX_PASSES:
+                _set_helper_workflow_state(
+                    item=item,
+                    item_id=item_id,
+                    entity_id=power_entity_id,
+                    status="failed",
+                    progress_phase="failed",
+                    progress_label="Création des helpers expirée.",
+                    attempt=_HELPER_SYNC_ATTEMPTS,
+                    attempts_total=_HELPER_SYNC_ATTEMPTS,
+                    will_retry=False,
+                    retry_scheduled=False,
+                    last_error=error,
+                    mapping=mapping,
+                    done=True,
+                    job_id=job_id,
+                )
+                await _save_catalogue_if_possible(hass)
+                return
+
+            _set_helper_workflow_state(
+                item=item,
+                item_id=item_id,
+                entity_id=power_entity_id,
+                status="pending_background",
+                progress_phase="pending_background",
+                progress_label="Helpers partiels, nouvelle tentative en arrière-plan…",
+                attempt=_HELPER_SYNC_ATTEMPTS,
+                attempts_total=_HELPER_SYNC_ATTEMPTS,
+                will_retry=False,
+                retry_scheduled=True,
+                last_error=error,
+                mapping=mapping,
+                done=False,
+                job_id=job_id,
+            )
+            await _save_catalogue_if_possible(hass)
+            await asyncio.sleep(_HELPER_BG_DELAY_S)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        current_item_id, item = _find_catalogue_item_by_source_entity_id(catalogue, power_entity_id)
+        if item and current_item_id == item_id:
+            _set_helper_workflow_state(
+                item=item,
+                item_id=item_id,
+                entity_id=power_entity_id,
+                status="failed",
+                progress_phase="failed",
+                progress_label="Création des helpers interrompue.",
+                attempt=_HELPER_SYNC_ATTEMPTS,
+                attempts_total=_HELPER_SYNC_ATTEMPTS,
+                will_retry=False,
+                retry_scheduled=False,
+                last_error=str(exc),
+                mapping=_energy_mapping_from_item(item),
+                done=True,
+                job_id=job_id,
+            )
+            await _save_catalogue_if_possible(hass)
+    finally:
+        registry = _task_registry(hass)
+        current = registry.get(power_entity_id)
+        if current is asyncio.current_task():
+            registry.pop(power_entity_id, None)
+
+
+async def _run_standard_enrichment_workflow(*, hass, catalogue: dict, power_entity_id: str, safe_mode: bool, self_heal: bool) -> dict | None:
+    item_id, item = _find_catalogue_item_by_source_entity_id(catalogue, power_entity_id)
+    if not item:
+        return None
+
+    aggregate_created: list[dict] = []
+    aggregate_skipped: list[dict] = []
+    aggregate_errors: list[dict] = []
+
+    initial = _set_helper_workflow_state(
+        item=item,
+        item_id=item_id,
+        entity_id=power_entity_id,
+        status="running",
+        progress_phase="ensure_total",
+        progress_label="Création des helpers énergie…",
+        attempt=0,
+        attempts_total=_HELPER_SYNC_ATTEMPTS,
+        will_retry=False,
+        retry_scheduled=False,
+        last_error=None,
+        mapping=_energy_mapping_from_item(item),
+        done=False,
+    )
+    await _save_catalogue_if_possible(hass)
+
+    for attempt in range(1, _HELPER_SYNC_ATTEMPTS + 1):
+        _set_helper_workflow_state(
+            item=item,
+            item_id=item_id,
+            entity_id=power_entity_id,
+            status="running",
+            progress_phase="ensure_total",
+            progress_label=f"Création du helper total… tentative {attempt}/{_HELPER_SYNC_ATTEMPTS}",
+            attempt=attempt,
+            attempts_total=_HELPER_SYNC_ATTEMPTS,
+            will_retry=False,
+            retry_scheduled=False,
+            last_error=None,
+            mapping=_energy_mapping_from_item(item),
+            done=False,
+            job_id=initial.get("job_id"),
+        )
+        await _save_catalogue_if_possible(hass)
+
+        result = await _ensure_energy_helpers_once(
+            hass=hass,
+            catalogue=catalogue,
+            power_entity_id=power_entity_id,
+            safe_mode=safe_mode,
+            self_heal=self_heal,
+        )
+        aggregate_created.extend(result.get("created") or [])
+        aggregate_skipped.extend(result.get("skipped") or [])
+        aggregate_errors.extend(result.get("errors") or [])
+        mapping = result.get("mapping") or _energy_mapping_from_item(item)
+
+        if result.get("ok"):
+            status_payload = _set_helper_workflow_state(
+                item=item,
+                item_id=item_id,
+                entity_id=power_entity_id,
+                status="ready",
+                progress_phase="ready",
+                progress_label="Helpers énergie prêts",
+                attempt=attempt,
+                attempts_total=_HELPER_SYNC_ATTEMPTS,
+                will_retry=False,
+                retry_scheduled=False,
+                last_error=None,
+                mapping=mapping,
+                done=True,
+                job_id=initial.get("job_id"),
+            )
+            await _save_catalogue_if_possible(hass)
+            return {
+                **result,
+                "created": aggregate_created,
+                "skipped": aggregate_skipped,
+                "errors": aggregate_errors,
+                "helper_status": status_payload,
+            }
+
+        error = result.get("error")
+        if error == "total_not_ready" and attempt < _HELPER_SYNC_ATTEMPTS:
+            _set_helper_workflow_state(
+                item=item,
+                item_id=item_id,
+                entity_id=power_entity_id,
+                status="running",
+                progress_phase="retry_wait",
+                progress_label=f"Helper total pas encore prêt, nouvelle tentative… ({attempt + 1}/{_HELPER_SYNC_ATTEMPTS})",
+                attempt=attempt,
+                attempts_total=_HELPER_SYNC_ATTEMPTS,
+                will_retry=True,
+                retry_scheduled=False,
+                last_error=error,
+                mapping=mapping,
+                done=False,
+                job_id=initial.get("job_id"),
+            )
+            await _save_catalogue_if_possible(hass)
+            await asyncio.sleep(_HELPER_SYNC_RETRY_DELAYS_S[attempt - 1])
+            continue
+
+        if error == "total_not_ready":
+            status_payload = _set_helper_workflow_state(
+                item=item,
+                item_id=item_id,
+                entity_id=power_entity_id,
+                status="pending_background",
+                progress_phase="pending_background",
+                progress_label="Helpers partiels, finalisation en arrière-plan…",
+                attempt=attempt,
+                attempts_total=_HELPER_SYNC_ATTEMPTS,
+                will_retry=False,
+                retry_scheduled=True,
+                last_error=error,
+                mapping=mapping,
+                done=False,
+                job_id=initial.get("job_id"),
+            )
+            await _save_catalogue_if_possible(hass)
+            _schedule_helper_task(
+                hass=hass,
+                catalogue=catalogue,
+                item_id=item_id,
+                power_entity_id=power_entity_id,
+                safe_mode=safe_mode,
+                self_heal=self_heal,
+                job_id=status_payload.get("job_id") or initial.get("job_id"),
+            )
+            return {
+                **result,
+                "created": aggregate_created,
+                "skipped": aggregate_skipped,
+                "errors": aggregate_errors,
+                "helper_status": status_payload,
+            }
+
+        status_payload = _set_helper_workflow_state(
+            item=item,
+            item_id=item_id,
+            entity_id=power_entity_id,
+            status="failed",
+            progress_phase="failed",
+            progress_label="Création des helpers incomplète.",
+            attempt=attempt,
+            attempts_total=_HELPER_SYNC_ATTEMPTS,
+            will_retry=False,
+            retry_scheduled=False,
+            last_error=error,
+            mapping=mapping,
+            done=True,
+            job_id=initial.get("job_id"),
+        )
+        await _save_catalogue_if_possible(hass)
+        return {
+            **result,
+            "created": aggregate_created,
+            "skipped": aggregate_skipped,
+            "errors": aggregate_errors,
+            "helper_status": status_payload,
+        }
+
+    return None
 
 
 class EnrichApplyView(HomeAssistantView):
@@ -261,7 +1080,6 @@ class EnrichApplyView(HomeAssistantView):
 
         domain_data = hass.data.get(DOMAIN, {})
         catalogue = domain_data.get("catalogue") or {}
-        catalogue_save = domain_data.get("catalogue_save")
 
         entity_ids = body.get("entity_ids")
         if not isinstance(entity_ids, list) or not entity_ids:
@@ -283,9 +1101,7 @@ class EnrichApplyView(HomeAssistantView):
         skipped: list[dict] = []
         errors: list[dict] = []
         decisions_required: list[dict] = []
-
-        ent_reg = er.async_get(hass)
-        catalogue_dirty = False
+        helper_statuses: list[dict] = []
 
         bases = {}
         for eid in entity_ids:
@@ -307,7 +1123,6 @@ class EnrichApplyView(HomeAssistantView):
             info = bases.setdefault(base, {"base": base, "power_entity_id": eid})
             info["power_entity_id"] = eid
 
-        # Build exports (kept for transparency + fallback)
         integration_sensors = []
         utility_meter_block = {}
 
@@ -327,276 +1142,35 @@ class EnrichApplyView(HomeAssistantView):
         if mode == "create_helpers":
             for base, info in sorted(bases.items()):
                 power_eid = info.get("power_entity_id")
-                helper_entity_ids = _energy_helper_entity_ids(base)
-                total_eid = helper_entity_ids["total"]
-
                 if not power_eid:
                     skipped.append({"entity_id": base, "reason": "missing_power_entity"})
                     continue
 
-                total_name = f"{base}_kwh_total"
-
-                # 0) Preflight power (optional but improves UX)
-                power_state = hass.states.get(power_eid)
-                power_value = _as_float_state(power_state.state if power_state else None)
-                if safe_mode and power_value is None:
-                    skipped.append(
-                        {
-                            "entity_id": power_eid,
-                            "base": base,
-                            "reason": "power_not_ready",
-                            "hint": "Le capteur de puissance est unknown/unavailable. Attends une première mesure (allume une charge) puis relance.",
-                        }
-                    )
-                    mapping = _build_energy_helper_mapping(
-                        hass=hass,
-                        ent_reg=ent_reg,
-                        power_entity_id=power_eid,
-                        helper_entity_ids=helper_entity_ids,
-                    )
-                    if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
-                        catalogue_dirty = True
-                    continue
-
-                # 1) Integration helper (power -> kWh total)
-                reg_entry = ent_reg.async_get(total_eid)
-                if hass.states.get(total_eid) is None and reg_entry is None:
-                    # If a stale config entry exists, attempt self-heal.
-                    if _has_config_entry_named(hass, domain="integration", name=total_name):
-                        if self_heal:
-                            removed = await _remove_config_entry_if_present(hass, domain="integration", name=total_name)
-                            if removed:
-                                skipped.append({"entity_id": total_eid, "reason": "self_heal_removed_stale_entry", "kind": "integration"})
-                            else:
-                                errors.append(
-                                    {
-                                        "entity_id": total_eid,
-                                        "kind": "integration",
-                                        "base": base,
-                                        "error": "config_entry_exists_but_entity_missing",
-                                        "hint": "Une config entry existe mais l'entité est absente. Va dans Settings → Devices & services → Helpers et supprime l'entrée, ou utilise enrich/cleanup.",
-                                    }
-                                )
-                                mapping = _build_energy_helper_mapping(
-                                    hass=hass,
-                                    ent_reg=ent_reg,
-                                    power_entity_id=power_eid,
-                                    helper_entity_ids=helper_entity_ids,
-                                )
-                                if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
-                                    catalogue_dirty = True
-                                continue
-                        else:
-                            errors.append(
-                                {
-                                    "entity_id": total_eid,
-                                    "kind": "integration",
-                                    "base": base,
-                                    "error": "config_entry_exists_but_entity_missing",
-                                }
-                            )
-                            mapping = _build_energy_helper_mapping(
-                                hass=hass,
-                                ent_reg=ent_reg,
-                                power_entity_id=power_eid,
-                                helper_entity_ids=helper_entity_ids,
-                            )
-                            if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
-                                catalogue_dirty = True
-                            continue
-
-                    # Integral helper needs unit_time to build unit (kWh from W) on many HA versions.
-                    data_variants = [
-                        {"source": power_eid, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
-                        {"source_entity_id": power_eid, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
-                        {"source_sensor": power_eid, "name": total_name, "unit_prefix": "k", "unit_time": "h", "round": 3, "method": "left"},
-                    ]
-
-                    res = await _try_create_helper_via_flow(hass=hass, domain="integration", data_variants=data_variants)
-                    if res.get("ok"):
-                        if res.get("already_configured"):
-                            skipped.append({"entity_id": total_eid, "reason": "already_configured", "flow": res.get("result")})
-                        else:
-                            created.append({"entity_id": total_eid, "kind": "integration", "base": base, "flow": res.get("result")})
-
-                        ok = await _wait_for_entity_or_registry(hass=hass, ent_reg=ent_reg, entity_id=total_eid, timeout_s=6.0)
-                        if not ok:
-                            # Rollback: never leave a red helper behind.
-                            if self_heal:
-                                await _remove_config_entry_if_present(hass, domain="integration", name=total_name)
-                            errors.append(
-                                {
-                                    "entity_id": total_eid,
-                                    "kind": "integration",
-                                    "base": base,
-                                    "error": "entity_not_created_after_flow",
-                                    "rolled_back": bool(self_heal),
-                                    "hint": "L'entité n'a pas été créée après le flow. Vérifie Settings → System → Logs (filtre 'integration').",
-                                }
-                            )
-                            mapping = _build_energy_helper_mapping(
-                                hass=hass,
-                                ent_reg=ent_reg,
-                                power_entity_id=power_eid,
-                                helper_entity_ids=helper_entity_ids,
-                            )
-                            if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
-                                catalogue_dirty = True
-                            continue
-                    else:
-                        errors.append(
-                            {
-                                "entity_id": total_eid,
-                                "kind": "integration",
-                                "base": base,
-                                "error": res.get("error"),
-                                "hint": "Échec du config flow. Vérifie Settings → System → Logs.",
-                            }
-                        )
-                        mapping = _build_energy_helper_mapping(
-                            hass=hass,
-                            ent_reg=ent_reg,
-                            power_entity_id=power_eid,
-                            helper_entity_ids=helper_entity_ids,
-                        )
-                        if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
-                            catalogue_dirty = True
-                        continue
-                else:
-                    skipped.append({"entity_id": total_eid, "reason": "already_exists_or_registered", "registry": bool(reg_entry)})
-
-                # 2) Utility meter helpers (day/week/month/year)
-                total_state = hass.states.get(total_eid)
-                total_value = _as_float_state(total_state.state if total_state else None)
-                if safe_mode and total_value is None:
-                    skipped.append(
-                        {
-                            "entity_id": total_eid,
-                            "base": base,
-                            "reason": "total_not_ready",
-                            "hint": "Le compteur kWh total est encore unknown. Attends une première mesure de puissance, puis relance la création des compteurs (day/week/month/year).",
-                        }
-                    )
-                    mapping = _build_energy_helper_mapping(
-                        hass=hass,
-                        ent_reg=ent_reg,
-                        power_entity_id=power_eid,
-                        helper_entity_ids=helper_entity_ids,
-                    )
-                    if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
-                        catalogue_dirty = True
-                    continue
-
-                cycles = [
-                    ("day", "daily"),
-                    ("week", "weekly"),
-                    ("month", "monthly"),
-                    ("year", "yearly"),
-                ]
-
-                for suf, cycle in cycles:
-                    meter_name = f"{base}_kwh_{suf}"
-                    meter_eid = helper_entity_ids[suf]
-                    reg_meter = ent_reg.async_get(meter_eid)
-
-                    if hass.states.get(meter_eid) is not None or reg_meter is not None:
-                        skipped.append({"entity_id": meter_eid, "reason": "already_exists_or_registered", "registry": bool(reg_meter)})
-                        continue
-
-                    # If stale config entry exists, attempt self-heal.
-                    if _has_config_entry_named(hass, domain="utility_meter", name=meter_name):
-                        if self_heal:
-                            removed = await _remove_config_entry_if_present(hass, domain="utility_meter", name=meter_name)
-                            if removed:
-                                skipped.append({"entity_id": meter_eid, "reason": "self_heal_removed_stale_entry", "kind": "utility_meter"})
-                            else:
-                                errors.append(
-                                    {
-                                        "entity_id": meter_eid,
-                                        "kind": "utility_meter",
-                                        "base": base,
-                                        "cycle": cycle,
-                                        "error": "config_entry_exists_but_entity_missing",
-                                        "hint": "Une config entry existe mais l'entité est absente. Supprime l'entrée dans Helpers, ou utilise enrich/cleanup.",
-                                    }
-                                )
-                                continue
-                        else:
-                            skipped.append({"entity_id": meter_eid, "reason": "config_entry_exists"})
-                            continue
-
-                    # Home Assistant expects multiple keys to exist in config_entry.options
-                    # (missing keys can crash setup).
-                    base_payload = {
-                        "source": total_eid,
-                        "name": meter_name,
-                        "cycle": cycle,
-                        "offset": 0.0,
-                        "tariffs": [],
-                        "delta_values": False,
-                        "net_consumption": False,
-                        "periodically_resetting": False,
-                        "always_available": False,
-                    }
-                    data_variants = [
-                        base_payload,
-                        {**base_payload, "source_sensor": total_eid},
-                        {**base_payload, "source_entity_id": total_eid},
-                        {**base_payload, "meter_id": meter_name},
-                    ]
-
-                    res = await _try_create_helper_via_flow(hass=hass, domain="utility_meter", data_variants=data_variants)
-                    if res.get("ok"):
-                        if res.get("already_configured"):
-                            skipped.append({"entity_id": meter_eid, "reason": "already_configured", "flow": res.get("result")})
-                        else:
-                            created.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "flow": res.get("result")})
-
-                        ok = await _wait_for_entity_or_registry(hass=hass, ent_reg=ent_reg, entity_id=meter_eid, timeout_s=6.0)
-                        if not ok:
-                            if self_heal:
-                                await _remove_config_entry_if_present(hass, domain="utility_meter", name=meter_name)
-                            errors.append(
-                                {
-                                    "entity_id": meter_eid,
-                                    "kind": "utility_meter",
-                                    "base": base,
-                                    "cycle": cycle,
-                                    "error": "entity_not_created_after_flow",
-                                    "rolled_back": bool(self_heal),
-                                    "hint": "L'entité n'a pas été créée après le flow. Vérifie Settings → System → Logs (filtre 'utility_meter').",
-                                }
-                            )
-                            continue
-
-                        await hass.async_block_till_done()
-                    else:
-                        errors.append({"entity_id": meter_eid, "kind": "utility_meter", "base": base, "cycle": cycle, "error": res.get("error")})
-
-                mapping = _build_energy_helper_mapping(
+                result = await _run_standard_enrichment_workflow(
                     hass=hass,
-                    ent_reg=ent_reg,
+                    catalogue=catalogue,
                     power_entity_id=power_eid,
-                    helper_entity_ids=helper_entity_ids,
+                    safe_mode=safe_mode,
+                    self_heal=self_heal,
                 )
-                if _persist_energy_helper_mapping(catalogue=catalogue, power_entity_id=power_eid, mapping=mapping):
-                    catalogue_dirty = True
-                else:
+                if result is None:
                     errors.append({
                         "entity_id": power_eid,
                         "kind": "catalogue",
                         "base": base,
                         "error": "catalogue_item_not_found_for_helper_mapping",
                     })
+                    continue
 
+                created.extend(result.get("created") or [])
+                skipped.extend(result.get("skipped") or [])
+                errors.extend(result.get("errors") or [])
+                status = result.get("helper_status")
+                if isinstance(status, dict):
+                    helper_statuses.append(status)
         else:
             for base in sorted(bases.keys()):
                 skipped.append({"entity_id": f"sensor.{base}_kwh_total", "reason": "export_ready"})
-
-        if catalogue_dirty and isinstance(catalogue, dict):
-            catalogue["generated_at"] = utc_now_iso()
-            if catalogue_save:
-                await catalogue_save()
 
         return self.json(
             {
@@ -613,6 +1187,7 @@ class EnrichApplyView(HomeAssistantView):
                 "skipped": skipped,
                 "errors": errors,
                 "decisions_required": decisions_required,
+                "helper_statuses": helper_statuses,
                 "exports": exports,
             }
         )
