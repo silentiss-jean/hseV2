@@ -1,171 +1,139 @@
-# Architecture actuelle (audit initial)
+# Architecture actuelle (état courant)
 
-> État observé avant correction fonctionnelle. Cette note sert de point d’entrée pour remettre la documentation à jour et préparer une unification progressive du backend.
+> Document de maintenance mis à jour après l’ajout du suivi de workflow `reference_total` dans l’UI Configuration et après consolidation du flux d’enrichissement helpers.
 
 ## Vue d’ensemble
 
-L’intégration est déjà structurée autour de quatre couches principales :
+L’intégration est structurée autour de quatre couches principales :
 
 1. **Bootstrap / runtime** : `__init__.py`
 2. **Stores partagés** : `catalogue_*`, `meta_*`
 3. **API unifiée** : `api/unified_api.py` + `api/views/*`
 4. **Panel frontend** : `web_static/panel/*`
 
+Le point important n’est plus “un onglet = un backend”, mais bien “un runtime + des stores + une API unifiée + un panel unique”.
+
 ## 1) Bootstrap / runtime
 
-Le point d’entrée `__init__.py` fait aujourd’hui plusieurs choses structurantes :
+Le point d’entrée `__init__.py` :
 
 - enregistre l’API unifiée ;
 - expose les assets statiques du panel ;
 - enregistre un panel HA unique (`hse-panel`) ;
 - charge et persiste les stores `catalogue` et `meta` ;
-- lance deux boucles périodiques : refresh catalogue et meta sync.
+- lance les boucles périodiques de refresh catalogue et de synchronisation meta.
 
-### Conséquence d’architecture
+Le runtime expose déjà des capacités transverses réelles, mais elles restent concentrées sur **scan / fusion catalogue / sync meta / persistence**.
 
-Le runtime ne se contente plus d’exposer des vues isolées : il met déjà en place un **socle partagé** pour l’ensemble des onglets. La doc future doit donc partir de cette réalité et non d’une lecture “un onglet = un backend indépendant”.
+## 2) Catalogue
 
-### Ce que confirme la lecture de `__init__.py`
+Le refresh catalogue scanne les `sensor.*`, détecte leur nature (`power` / `energy`), ignore les entités HSE générées, puis fusionne le résultat dans un store persistant.
 
-La lecture complète du bootstrap renforce fortement une conclusion importante : les callables runtime partagés déjà installés dans `hass.data[DOMAIN]` concernent surtout deux axes, `catalogue_refresh` et `meta_sync_tick`. Le premier reconstruit les candidats `sensor.*`, filtre les entités HSE, détecte `power/energy`, fusionne dans le catalogue persistant via `merge_scan_into_catalogue`, sauvegarde puis synchronise les repairs ; le second calcule le snapshot HA, produit le `pending_diff` meta, met à jour `sync`, et persiste si demandé.
+### Rôle actuel du catalogue
 
-Autrement dit, le runtime central expose déjà des capacités transverses réelles, mais elles restent concentrées sur **scan / fusion catalogue / sync meta / persistence**. La lecture ne révèle pas de troisième callable partagé dédié à un calcul coût/énergie, ni de tâche périodique spécialisée qui pré-calculerait les tables de l’overview hors du endpoint lui-même.
+Le catalogue est un **registre métier persistant** :
 
-## 2) Catalogue : rôle actuel
-
-Le refresh catalogue scanne les `sensor.*`, détecte leur nature (`power` / `energy`), ignore les entités HSE générées, puis construit un payload de scan fusionné dans le store persistant.
-
-### Ce que fait `catalogue_manager.merge_scan_into_catalogue`
-
-La fusion repose sur une logique d’item persistant :
-
-- chaque item a un identifiant stable dérivé du registre (`reg:{platform}:{unique_id}`) ou, à défaut, de l’`entity_id` ;
-- la source observée met à jour les champs techniques (`entity_id`, `kind`, `unit`, `device_class`, `integration_domain`, `status`, etc.) ;
-- la santé (`health`) est recalculée à chaque scan ;
-- une escalade est produite selon le temps d’indisponibilité (`none`, `warning_15m`, `error_24h`, `action_48h`) ;
-- un item marqué `triage.policy = removed` ne garde jamais d’escalade active.
+- identité stable des items ;
+- source observée actuelle (`entity_id`, `kind`, `unit`, `device_class`, `integration_domain`, `status`, etc.) ;
+- santé / indisponibilité / escalade ;
+- triage (`policy`, `mute_until`, `note`) ;
+- enrichissement / règles de référence totale.
 
 ### Vues catalogue exposées
 
-`CatalogueGetView` renvoie directement le store `catalogue` présent dans `hass.data[DOMAIN]`, avec un fallback minimal `{schema_version, generated_at, items, settings}` si rien n’est encore chargé. `CatalogueRefreshView` ne reconstruit pas elle-même le catalogue : elle délègue à un callable partagé `catalogue_refresh` et renvoie le résultat du refresh forcé.
+- `CatalogueGetView` renvoie le store partagé `catalogue`.
+- `CatalogueRefreshView` délègue à `catalogue_refresh`.
+- `CatalogueItemTriageView` met à jour le triage d’un item.
+- `CatalogueTriageBulkView` applique le triage en lot.
+- `CatalogueReferenceTotalView` gère le capteur de référence totale et impose `enrichment.include = False`.
 
-`CatalogueItemTriageView` modifie directement le `triage` d’un item du store partagé (`policy`, `mute_until`, `note`), met à jour `updated_at`, puis déclenche immédiatement `catalogue_save` si disponible. `CatalogueTriageBulkView` applique la même logique sur une liste d’items, avec une exigence explicite de sécurité/idempotence et une persistance unique en fin d’opération.
+### Point important
 
-`CatalogueReferenceTotalView` gère de manière centralisée le capteur de référence totale : il résout l’`entity_id` cible dans le catalogue, refuse les entrées hors catalogue, efface l’éventuel ancien `is_reference_total`, marque la nouvelle cible, et impose l’invariant `enrichment.include = False` pour qu’un capteur de référence ne soit jamais compté dans les totaux internes.
+Le catalogue n’est pas une simple liste brute de détection. C’est la **source métier partagée** consommée par plusieurs vues et plusieurs écrans.
 
-### Lecture fonctionnelle
-
-Le catalogue n’est donc pas une simple liste brute de détection. C’est déjà un **registre métier persistant** qui stabilise l’identité des capteurs, leur état de santé, le triage, et les règles de référence totale. Les vues principales catalogue confirment que l’intention est bien de faire consommer et modifier ce socle partagé directement, plutôt que de dupliquer la logique dans les endpoints.
-
-## 3) Meta : rôle actuel
+## 3) Meta
 
 Le bloc `meta` constitue un second store partagé, distinct du catalogue. Il sert à suivre la structure HA (areas, entités, affectations) et à produire des suggestions d’alignement sans écraser brutalement les choix manuels.
 
 ### Ce que fait `meta_sync`
 
-`async_build_ha_snapshot` extrait un snapshot des areas et des `sensor.*` présents dans l’entity registry. `compute_pending_diff` compare ensuite ce snapshot au store `meta` et produit :
+`async_build_ha_snapshot` extrait un snapshot des areas et des `sensor.*` présents dans l’entity registry. `compute_pending_diff` produit ensuite les créations / renommages / suggestions nécessaires.
 
-- des salles à créer (`rooms.create`) ;
-- des salles à renommer (`rooms.rename`) ;
-- des suggestions d’affectation de capteurs à une salle (`assignments.suggest_room`).
+### Cycle actuel
 
-### Vue meta et validation
+Le flux est maintenant clairement :
 
-`MetaView` confirme que ce bloc est bien le backend source of truth des pages de customisation UI. La vue accepte et normalise des structures souples pour `rooms` et `types` (liste ou dict indexé par id), valide strictement les IDs/noms, valide les `assignments` par `entity_id`, et persiste ensuite le tout dans `meta_store["meta"]` avec `updated_at` et `generated_at`.
+- `preview` ;
+- validation / inspection UI ;
+- `apply` (`auto` ou `all`) ;
+- persistance.
 
-Cette lecture montre aussi une séparation intéressante : le store `meta` ne contient pas seulement des suggestions auto, mais bien les décisions durables de customisation utilisateur (`rooms`, `types`, `assignments`, `rules`). On est donc face à un vrai **modèle métier éditable**, pas juste à une projection calculée de Home Assistant.
+Le store `meta` est donc un **modèle métier éditable**, pas seulement une projection calculée.
 
-### Preview / apply sync
+## 4) Pricing
 
-`MetaSyncPreviewView` ne recalcule pas elle-même le diff : elle délègue à un callable partagé `meta_sync_tick`, peut demander ou non la persistance (`persist=false`), puis renvoie à la fois le résultat `sync` et l’état courant de `meta_store`.
+La configuration tarifaire est portée par `settings/pricing` et stockée dans `catalogue.settings.pricing`.
 
-`MetaSyncApplyView` complète logiquement le cycle : il lit `sync.pending_diff`, refuse un apply sans changements en attente, accepte un `apply_mode` (`auto` ou `all`), applique le diff via `apply_pending_diff`, met à jour `meta.updated_at` et `meta_store.generated_at`, puis vide `pending_diff` et persiste. La synchronisation meta apparaît donc maintenant comme une chaîne backend complète **preview -> validation -> apply -> persist**, avec la logique métier de mutation concentrée en dehors de la vue HTTP.
+### Modèle actuel
 
-### Règles importantes
+Le backend stocke notamment :
 
-- Les IDs de room auto dérivent des `area_id` Home Assistant (`ha_<area_id normalisé>`).
-- Les renommages auto respectent les cas manuels via `name_mode`.
-- Les affectations de room respectent aussi le mode manuel via `room_mode`.
-- `apply_pending_diff` applique ensuite ces changements en mode `auto` ou `all`.
-
-### Lecture fonctionnelle
-
-Le store `meta` joue déjà le rôle d’une **couche d’interprétation et de personnalisation** entre Home Assistant brut et la représentation métier utilisée par l’UI. Comme pour le catalogue, les endpoints ne portent pas la logique profonde : ils exposent, valident et persévèrent un modèle partagé déjà installé dans le runtime.
-
-## 4) Pricing : rôle actuel
-
-La configuration tarifaire est aujourd’hui portée par l’API `settings/pricing` et stockée dans le catalogue persistant sous `catalogue["settings"]["pricing"]`.
-
-### Modèle actuel observé
-
-Le backend stocke explicitement :
-
-- `contract_type` : `fixed` ou `hphc` ;
-- `display_mode` : `ttc` ou `ht` ;
-- `subscription_monthly` : paire `{ht, ttc}` ;
-- `cost_entity_ids` : liste des entités sélectionnées pour le calcul ;
-- selon le contrat, soit `fixed_energy_per_kwh`, soit `hp_energy_per_kwh` + `hc_energy_per_kwh` + `hc_schedule` ;
+- `contract_type` ;
+- `display_mode` ;
+- `subscription_monthly` ;
+- `cost_entity_ids` ;
+- les prix énergie selon le contrat ;
 - `updated_at`.
 
-### Validation et garde-fous
+### Invariants métier
 
-`SettingsPricingView` confirme que le pricing est lui aussi un vrai bloc de persistance validé côté backend. La vue fournit des valeurs par défaut cohérentes au `GET`, sait effacer totalement la config via `clear`, valide strictement `contract_type`, `display_mode`, les paires de prix `{ht, ttc}`, la liste `cost_entity_ids`, et les horaires `hc_schedule` au format `HH:MM`.
+- la TVA n’est jamais déduite implicitement ;
+- le capteur `reference_total` ne peut jamais apparaître dans `cost_entity_ids` ;
+- le pricing est validé et persisté côté backend.
 
-La vue réaffirme aussi deux invariants importants : la TVA n’est jamais déduite implicitement, et le capteur marqué `reference_total` dans le catalogue ne peut jamais apparaître dans `cost_entity_ids`. Une fois validé, le bloc pricing est écrit dans `catalogue.settings.pricing`, `generated_at` est mis à jour, puis `catalogue_save` persiste l’ensemble.
+## 5) API unifiée
 
-### Lecture fonctionnelle
+`api/unified_api.py` est le registre central des endpoints exposés par l’intégration.
 
-Le modèle tarifaire est donc déjà **centralisé et défensif** côté persistance. Il est plus avancé qu’un simple formulaire de config, mais il lui manque encore la couche de calcul mutualisée qui consommerait pleinement ce contrat pour alimenter l’overview et les futurs coûts dérivés.
+### Familles de vues
 
-## 5) API unifiée : rôle actuel
-
-`api/unified_api.py` joue aujourd’hui le rôle de registre central des endpoints HTTP exposés par l’intégration. La structure visible n’est plus celle d’APIs isolées par écran, mais déjà celle d’un routage regroupé par domaines fonctionnels.
-
-### Familles de vues actuellement enregistrées
-
-- **Base panel / disponibilité** : `PingView`, `FrontendManifestView`
-- **Scan / catalogue** : `EntitiesScanView`, `CatalogueGetView`, `CatalogueRefreshView`, `CatalogueItemTriageView`, `CatalogueTriageBulkView`, `CatalogueReferenceTotalView`
-- **Pricing** : `SettingsPricingView`
-- **Meta** : `MetaView`, `MetaSyncPreviewView`, `MetaSyncApplyView`
-- **Enrichissement** : `EnrichPreviewView`, `EnrichApplyView`, `EnrichDiagnoseView`, `EnrichCleanupView`
-- **Migration / export** : `MigrationExportView`
-- **Overview / dashboard** : `DashboardOverviewView`
+- Base panel / disponibilité
+- Scan / catalogue
+- Pricing
+- Meta
+- Enrichissement
+- Migration / export
+- Overview / dashboard
 
 ### Lecture fonctionnelle
 
-L’API unifiée sert déjà de **colonne vertébrale** entre les stores partagés et les onglets UI. La bonne direction n’est donc pas de recréer des backends parallèles, mais d’augmenter la cohérence et le niveau de complétude de cette couche unique.
+La bonne direction n’est pas de recréer des backends parallèles, mais d’augmenter la cohérence de cette couche unique.
 
-## 6) Overview : contrat actuel
+## 6) Overview
 
-Le backend `dashboard_overview.py` confirme maintenant très clairement que l’overview est un endpoint d’agrégation et de tolérance, pas encore un vrai moteur de coût. Sa responsabilité actuelle est de réunir en une seule réponse le pricing stocké, la sélection `cost_entity_ids`, la puissance live des capteurs, la référence totale, un résumé `meta_sync`, des structures de tableaux préformatées, et des `warnings` quand certaines données manquent.
+`dashboard_overview.py` est un endpoint d’agrégation et de tolérance, pas encore un moteur de coût complet.
 
-### Ce que le backend calcule réellement
+### Ce qu’il calcule vraiment
 
-La vue relit `catalogue.settings.pricing`, extrait `cost_entity_ids`, reconstruit `selected` avec `entity_id`, nom, état, unité, timestamp et `power_w` converti en W ou kW. Elle calcule ensuite `top_live` par buckets (`100-500W`, `>500W`), somme la puissance live dans `computed.total_power_w`, relit le capteur `reference_total` depuis le catalogue, puis calcule un `delta.power_w` si la référence est disponible.
+- relit `catalogue.settings.pricing` ;
+- relit `cost_entity_ids` ;
+- reconstruit la sélection et la puissance live ;
+- somme la puissance live ;
+- relit le capteur `reference_total` ;
+- calcule un `delta.power_w` si la référence est disponible ;
+- remonte un résumé `meta_sync` et des warnings.
 
-Elle remonte aussi un résumé `meta_sync` à partir de `meta_store.sync`, et ajoute des warnings comme `no_reference_configured` ou `selected_sensors_have_no_numeric_state` selon l’état des données. Le design est donc déjà robuste côté UX : l’endpoint ne casse pas si des capteurs sont absents ou non numériques.
+### Ce qui reste vide
 
-### Ce qui reste structurellement vide
+Les structures de coûts et de tableaux existent déjà, mais beaucoup de champs restent à `None`.
 
-Les données de coût restent toutefois entièrement initialisées à vide :
+## 7) Enrichissement / migration
 
-- `totals.week|month|year` contiennent les champs de consommation et d’abonnement, mais à `None` ;
-- `cumulative_table`, `reference_table` et `delta_table` sont seulement des gabarits `hour/day/week/month/year` ;
-- `per_sensor_costs` crée une ligne par capteur sélectionné, mais laisse `hour/day/week/month/year` à `None`.
+Les vues d’enrichissement et d’export montrent qu’une partie importante de la logique métier vise déjà à standardiser les entités dérivées.
 
-Autrement dit, l’overview sait déjà **assembler** la forme finale attendue par l’UI, mais il ne sait pas encore **alimenter** cette forme avec une couche métier coût/énergie réutilisable.
+### Enrichissement helpers
 
-### Lecture fonctionnelle
-
-L’overview n’est donc pas “mal conçu” ; il est plutôt dans un état intermédiaire très lisible. Le backend a déjà fixé le contrat d’agrégation, la tolérance aux erreurs et la structure de sortie, mais il lui manque précisément le moteur commun qui relierait helpers énergétiques, pricing et périodes de calcul.
-
-## 7) Enrichissement / migration : état actuel
-
-Les vues d’enrichissement et d’export montrent qu’une partie importante de la logique métier vise déjà à standardiser les entités dérivées plutôt qu’à laisser chaque écran recalculer ses propres conventions.
-
-### Enrich preview
-
-`EnrichPreviewView` prend par défaut la sélection `pricing.cost_entity_ids`, filtre les entités de type `power`, dérive un `base slug`, puis calcule les entités attendues suivantes :
+`EnrichPreviewView` et `EnrichApplyView` partent par défaut de `pricing.cost_entity_ids`, filtrent les capteurs `power`, dérivent un `base slug`, puis construisent une convention commune :
 
 - `sensor.<base>_kwh_total`
 - `sensor.<base>_kwh_day`
@@ -173,79 +141,56 @@ Les vues d’enrichissement et d’export montrent qu’une partie importante de
 - `sensor.<base>_kwh_month`
 - `sensor.<base>_kwh_year`
 
-La vue renvoie ensuite un état de prévisualisation avec `per_source`, `to_create`, `already_ok`, `decisions_required` et un résumé quantitatif. Cela confirme que l’enrichissement est déjà pensé comme une **chaîne normalisée de dérivés énergétiques** à partir des capteurs de puissance sélectionnés.
+`EnrichApplyView` sait déjà créer réellement les helpers Home Assistant via config flows `integration` puis `utility_meter`, avec preview, diagnose, cleanup et rollback/safe mode autour du même modèle.
 
-### Enrich apply / diagnose / cleanup
+### Conséquence importante
 
-`EnrichApplyView` montre que l’enrichissement n’est pas resté au stade “prévu”. Il sait déjà tenter une création réelle de helpers Home Assistant via config flows pour `integration` puis `utility_meter`, avec deux modes (`create_helpers` ou `export_yaml`), un `safe_mode`, et une logique `self_heal` pour supprimer des config entries orphelines avant rollback si nécessaire.
+Le **mécanisme de création des helpers** est donc déjà générique pour les capteurs de puissance sélectionnés. Ce n’est pas un mécanisme réservé au capteur de référence totale.
 
-`EnrichDiagnoseView` complète ce flux avec une lecture par `base` de l’état du capteur de puissance, du `kwh_total`, des compteurs périodiques, de l’existence en registry/config entry, et de hints de readiness comme “power unknown/unavailable” ou “kWh total encore unknown”.
+## 8) Référence totale : état courant
 
-`EnrichCleanupView` ferme la boucle de remédiation : il sait retrouver, en `dry_run` ou en suppression réelle, des config entries `integration` et `utility_meter` associées aux bases dérivées de la sélection pricing, avec une option `stale_only` pour ne cibler que les entrées orphelines sans entité présente. Cela confirme que la chaîne enrichissement possède déjà un **cycle très avancé preview -> apply -> diagnose -> cleanup**, orienté exploitation, auto-réparation et rollback, pas seulement génération théorique.
+Le flux `reference_total` possède désormais une couche UI dédiée dans l’onglet Configuration.
 
-### Migration export
+### Ce qui existe maintenant
 
-`MigrationExportView` relit également le pricing et la sélection courante, reconstruit des `base` par capteur, puis génère plusieurs exports YAML :
-
-- un export `integration` pour créer `sensor.<base>_kwh_total` à partir d’un capteur de puissance ;
-- un export `utility_meter` pour créer les compteurs jour / semaine / mois / année ;
-- un export de capteurs de coût template pour contrat `fixed` seulement ;
-- une option 4 marquée comme non implémentée.
-
-### Lecture fonctionnelle
-
-Cette couche montre déjà une orientation forte : les helpers HSE attendus sont explicitement nommés, la sélection pricing sert de point d’entrée naturel, et la migration/export sert de pont entre l’existant Home Assistant et le modèle cible HSE. La lecture plus complète des fichiers fait apparaître une nuance importante : le flux enrichissement est déjà très avancé sur la création, le diagnostic et le nettoyage des helpers, alors que la partie coût reste encore minimale, dépend du contrat `fixed`, et ne constitue pas encore un moteur complet mutualisé pour l’overview.
-
-## 8) Frontend / thème : état actuel
-
-La couche UI montre déjà une orientation compatible avec ton objectif de continuer à faire évoluer les thèmes via variables CSS plutôt que par styles figés.
-
-### Panel CSS
-
-`style.hse.panel.css` définit un petit ensemble de variables HSE de base au niveau `:host`, comme `--hse_bg`, `--hse_fg`, `--hse_muted`, `--hse_border`, `--hse_card_bg`, `--hse_accent`, `--hse_danger`, puis construit les composants du panel (`card`, `button`, `input`, `table`, etc.) à partir de ces variables. Les couleurs ne sont donc pas codées en dur pour les composants principaux ; elles sont déjà dérivées d’un niveau d’abstraction HSE.
-
-### Couche d’alias
-
-`hse_alias.v2.css` montre une seconde couche importante : des alias HSE “v2” sont rebranchés vers les variables “v1”, par exemple `--hse_border -> --hse-border`, `--hse_muted -> --hse-text-muted`, `--hse_card_bg -> --hse-surface`, `--hse_accent -> --hse-accent`, `--hse_radius -> --hse-radius-lg`. Cela confirme que le système de thème est prévu pour évoluer par ajout d’alias et de tokens, plutôt que par réécriture brutale des vues.
+- endpoint frontend `get_reference_total_status()` ;
+- endpoint backend `GET home_suivi_elec/unified/catalogue/reference_total/status` ;
+- bloc visuel de progression du workflow dans la vue Configuration ;
+- réutilisation d’un snapshot persistant `item.workflow.reference_enrichment` quand disponible ;
+- polling frontend pour suivre l’état courant ;
+- garde-fou pour éviter l’affichage d’un statut périmé lors des changements rapides de référence.
 
 ### Lecture fonctionnelle
 
-Pour continuer à coder l’UI proprement, la bonne pratique est donc de prolonger ce modèle :
+Le **contrat de statut de workflow** n’est pas encore générique. Aujourd’hui, cette brique de suivi d’état est spécifique à `reference_total`, alors que le **mécanisme de création des helpers** est déjà plus général côté enrichissement.
 
-- ajouter de nouvelles variables HSE quand un besoin visuel est récurrent ;
-- brancher ces variables dans la couche d’alias/tokens plutôt que d’introduire des couleurs ou espacements en dur dans les vues ;
-- garder les composants JS et les écrans dépendants des tokens, pas des valeurs finales.
+## 9) Frontend / thème
 
-Cette lecture va bien dans le sens de ce que tu décris : les thèmes custom ne sont pas figés, et la dette à éviter est surtout l’introduction de styles locaux non tokenisés.
+La couche UI est compatible avec une évolution par tokens CSS et variables HSE.
 
-## 9) Implication pour l’unification
+La bonne pratique reste :
 
-L’état actuel montre que l’intégration a déjà amorcé le bon mouvement :
+- ajouter des variables HSE quand un besoin visuel est récurrent ;
+- brancher ces variables dans la couche d’alias/tokens ;
+- éviter les styles locaux non tokenisés.
+
+## 10) Implication pour l’unification
+
+L’état actuel montre déjà :
 
 - un runtime central ;
 - des stores partagés ;
 - une API unifiée ;
 - un panel unique ;
-- un modèle pricing stocké dans le catalogue ;
-- une convention d’enrichissement et d’export déjà partiellement normalisée ;
-- une couche UI déjà compatible avec une évolution par tokens CSS.
+- un pricing centralisé ;
+- une convention enrichissement helpers déjà stable ;
+- un flux UI spécifique de suivi `reference_total` ;
+- une base saine pour factoriser ensuite un contrat de statut de workflow plus générique.
 
-Le problème n’est donc plus “tout est éclaté”, mais plutôt “certaines vues utilisent déjà bien ce socle, d’autres ne l’exploitent pas encore complètement”.
+## 11) Décision recommandée
 
-## 10) Point déjà identifié sur l’overview
+La prochaine étape n’est pas de recopier le flux `reference_total` partout, mais de faire émerger une **couche commune de statut de workflow** réutilisable :
 
-L’onglet **Accueil / overview** consomme bien `GET /api/home_suivi_elec/unified/dashboard`, mais `dashboard_overview.py` renvoie aujourd’hui une structure de coûts largement vide (`None`) alors que le frontend sait déjà afficher ces champs.
-
-Cela suggère un état intermédiaire :
-
-- la structure de centralisation existe ;
-- la chaîne scan / enrich / pricing est partiellement unifiée ;
-- mais certaines vues métier restent encore incomplètes.
-
-## 11) Suite recommandée
-
-1. Documenter précisément les stores `catalogue` et `meta`.
-2. Cartographier `unified_api.py` et les responsabilités réelles de chaque vue.
-3. Comparer chaque onglet frontend avec son contrat API effectif.
-4. Identifier ce qui est déjà mutualisé, ce qui est encore spécifique, et ce qui manque.
-5. Corriger ensuite les vues incomplètes seulement après cette cartographie.
+- pour `reference_total` ;
+- pour les créations de helpers enrichissement quand un suivi d’état utilisateur est utile ;
+- sans dupliquer le polling et le rendu capteur par capteur.

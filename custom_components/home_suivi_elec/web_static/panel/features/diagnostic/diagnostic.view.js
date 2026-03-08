@@ -87,6 +87,57 @@
     return escalated;
   }
 
+  function _group_escalated_items(items) {
+    const groups = new Map();
+
+    for (const it of items || []) {
+      const item = it?.v || {};
+      const entity_id = item?.source?.entity_id || it?.id || "unknown";
+      const group = groups.get(entity_id) || {
+        group_id: entity_id,
+        entity_id,
+        items: [],
+        item_ids: [],
+        representative: null,
+      };
+
+      group.items.push(it);
+      group.item_ids.push(it.id);
+
+      const current = group.representative;
+      if (!current) {
+        group.representative = it;
+      } else {
+        const curRank = _esc_rank(current?.v?.health?.escalation);
+        const nextRank = _esc_rank(it?.v?.health?.escalation);
+        const curTs = String(current?.v?.health?.first_unavailable_at || "");
+        const nextTs = String(it?.v?.health?.first_unavailable_at || "");
+        if (nextRank > curRank || (nextRank === curRank && nextTs < curTs)) {
+          group.representative = it;
+        }
+      }
+
+      groups.set(entity_id, group);
+    }
+
+    const out = Array.from(groups.values());
+    out.sort((a, b) => {
+      const ea = _esc_rank(a.representative?.v?.health?.escalation);
+      const eb = _esc_rank(b.representative?.v?.health?.escalation);
+      if (ea !== eb) return eb - ea;
+      const ta = String(a.representative?.v?.health?.first_unavailable_at || "");
+      const tb = String(b.representative?.v?.health?.first_unavailable_at || "");
+      return ta.localeCompare(tb);
+    });
+    return out;
+  }
+
+  async function _apply_group_action(group, fn) {
+    for (const item_id of group?.item_ids || []) {
+      await fn(item_id);
+    }
+  }
+
   function render_diagnostic(container, catalogue, state, on_action) {
     const { el, clear } = window.hse_dom;
     clear(container);
@@ -144,52 +195,66 @@
     container.appendChild(header);
 
     const escalated = _filtered_escalated_items(catalogue, state.filter_q);
+    const grouped = _group_escalated_items(escalated);
 
     const selected_count = Object.keys(state.selected || {}).filter((k) => state.selected[k]).length;
-    const summary = el("div", "hse_card", `Alertes: ${escalated.length} | sélection: ${selected_count}`);
+    const summary = el("div", "hse_card", `Alertes: ${grouped.length} | items catalogue escaladés: ${escalated.length} | sélection: ${selected_count}`);
     container.appendChild(summary);
 
-    if (!escalated.length) {
+    if (!grouped.length) {
       container.appendChild(el("div", "hse_card", "Aucune alerte (avec ce filtre)."));
     } else {
-      for (const it of escalated) {
-        const item = it.v;
+      for (const group of grouped) {
+        const item = group.representative.v;
         const card = el("div", "hse_card");
 
         const row = el("div", "hse_toolbar");
         const cb = el("input");
         cb.type = "checkbox";
-        cb.checked = !!(state.selected && state.selected[it.id]);
-        cb.addEventListener("change", (ev) => on_action("select", { item_id: it.id, checked: ev.target.checked }));
+        cb.checked = group.item_ids.every((id) => !!(state.selected && state.selected[id]));
+        cb.addEventListener("change", async (ev) => {
+          for (const item_id of group.item_ids) {
+            await on_action("select", { item_id, checked: ev.target.checked });
+          }
+        });
         row.appendChild(cb);
 
-        const title = el("div", null, (item.source && item.source.entity_id) || it.id);
+        const title = el("div", null, group.entity_id);
         title.style.flex = "1";
         row.appendChild(title);
         card.appendChild(row);
 
         const esc = item.health && item.health.escalation;
+        const suffix = group.items.length > 1 ? ` | doublons catalogue: ${group.items.length}` : "";
         card.appendChild(
           el(
             "div",
             "hse_subtitle",
-            `${_esc_label(esc)}; since: ${_fmt_dt(item.health.first_unavailable_at)}; status: ${(item.source && item.source.status) || "?"}; state: ${(item.source && item.source.last_seen_state) || "?"}; integration: ${(item.source && item.source.integration_domain) || (item.source && item.source.platform) || "?"}`
+            `${_esc_label(esc)}; since: ${_fmt_dt(item.health.first_unavailable_at)}; status: ${(item.source && item.source.status) || "?"}; state: ${(item.source && item.source.last_seen_state) || "?"}; integration: ${(item.source && item.source.integration_domain) || (item.source && item.source.platform) || "?"}${suffix}`
           )
         );
 
         const actions = el("div", "hse_toolbar");
 
         const b7 = el("button", "hse_button", "Mute 7j");
-        b7.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(7) }));
+        b7.addEventListener("click", async () => {
+          await _apply_group_action(group, async (item_id) => on_action("mute", { item_id, mute_until: _local_iso_days_from_now(7) }));
+        });
 
         const b30 = el("button", "hse_button", "Mute 30j");
-        b30.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(30) }));
+        b30.addEventListener("click", async () => {
+          await _apply_group_action(group, async (item_id) => on_action("mute", { item_id, mute_until: _local_iso_days_from_now(30) }));
+        });
 
         const b90 = el("button", "hse_button", "Mute 90j");
-        b90.addEventListener("click", () => on_action("mute", { item_id: it.id, mute_until: _local_iso_days_from_now(90) }));
+        b90.addEventListener("click", async () => {
+          await _apply_group_action(group, async (item_id) => on_action("mute", { item_id, mute_until: _local_iso_days_from_now(90) }));
+        });
 
         const brm = el("button", "hse_button", "Mark removed");
-        brm.addEventListener("click", () => on_action("removed", { item_id: it.id }));
+        brm.addEventListener("click", async () => {
+          await _apply_group_action(group, async (item_id) => on_action("removed", { item_id }));
+        });
 
         actions.appendChild(b7);
         actions.appendChild(b30);
@@ -231,6 +296,9 @@
         "",
         "# 3) Voir les items muted (actifs)",
         "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.mute_until!=null) | {item_id:.key, entity_id:.value.source.entity_id, mute_until:.value.triage.mute_until}'",
+        "",
+        "# 4) Voir les doublons par entity_id dans le catalogue",
+        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '[.items | to_entries[] | {item_id:.key, entity_id:.value.source.entity_id, esc:.value.health.escalation}] | group_by(.entity_id)[] | select(length>1) | {entity_id: .[0].entity_id, count:length, item_ids: map(.item_id)}'",
       ].join("\n");
       adv2.appendChild(pre2);
       container.appendChild(adv2);
@@ -238,6 +306,7 @@
 
     window.hse_diag_view._local_iso_days_from_now = _local_iso_days_from_now;
     window.hse_diag_view._filtered_escalated_items = _filtered_escalated_items;
+    window.hse_diag_view._group_escalated_items = _group_escalated_items;
   }
 
   window.hse_diag_view = { render_diagnostic };
