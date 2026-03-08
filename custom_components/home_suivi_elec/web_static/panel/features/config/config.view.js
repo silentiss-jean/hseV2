@@ -19,6 +19,30 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     return null;
   }
 
+  function _reference_status_from_catalogue(catalogue, entity_id) {
+    const items = catalogue?.items || {};
+    let fallback = null;
+
+    for (const it of Object.values(items)) {
+      if (!it || typeof it !== "object") continue;
+      const src = it.source || {};
+      const wf = it.workflow?.reference_enrichment;
+      if (!wf || typeof wf !== "object") continue;
+
+      const snapshot = {
+        item_id: it.id || null,
+        entity_id: src.entity_id || null,
+        ...wf,
+      };
+
+      if (entity_id && snapshot.entity_id === entity_id) return snapshot;
+      if (it.enrichment?.is_reference_total === true) fallback = snapshot;
+      else if (!fallback) fallback = snapshot;
+    }
+
+    return fallback;
+  }
+
   function _power_candidates(scan_result) {
     const out = [];
     for (const c of scan_result?.candidates || []) {
@@ -175,6 +199,31 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     if (s === "unavailable" || s === "unknown") return "hse_badge_status_warn";
     if (ha_restored) return "hse_badge_status_warn";
     return "";
+  }
+
+  function _workflow_status_badge_class(status) {
+    const s = String(status || "idle").toLowerCase();
+    if (s === "ready") return "hse_badge_status_ok";
+    if (s === "failed") return "hse_badge_warn";
+    if (s === "running" || s === "pending_background") return "hse_badge_status_warn";
+    return "";
+  }
+
+  function _workflow_status_label(status) {
+    const s = String(status || "idle").toLowerCase();
+    if (s === "ready") return "prêt";
+    if (s === "running") return "en cours";
+    if (s === "pending_background") return "arrière-plan";
+    if (s === "failed") return "échec";
+    return "idle";
+  }
+
+  function _workflow_status_bg(status) {
+    const s = String(status || "idle").toLowerCase();
+    if (s === "ready") return "var(--success-color, rgba(46,125,50,.14))";
+    if (s === "failed") return "var(--error-color, rgba(211,47,47,.12))";
+    if (s === "running" || s === "pending_background") return "var(--warning-color, rgba(249,168,37,.12))";
+    return "var(--ha-card-background, rgba(255,255,255,.04))";
   }
 
   function _group_key(c) {
@@ -347,6 +396,7 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     const candidates = _power_candidates(model.scan_result);
 
     const effectiveRef = model.selected_reference_entity_id || model.current_reference_entity_id || null;
+    const refStatus = model.reference_status || _reference_status_from_catalogue(model.catalogue, effectiveRef);
 
     const selectedIdsRaw = Array.isArray(_get(draft, "cost_entity_ids", [])) ? _get(draft, "cost_entity_ids", []) : [];
     const selectedIds = effectiveRef ? selectedIdsRaw.filter((x) => x !== effectiveRef) : selectedIdsRaw.slice();
@@ -564,6 +614,34 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     refLine.textContent = `Référence actuelle: ${currentRef}`;
     refCard.appendChild(refLine);
 
+    if (refStatus) {
+      const statusBox = el("div", "hse_card hse_card_inner");
+      statusBox.style.background = _workflow_status_bg(refStatus.status);
+      statusBox.appendChild(el("div", null, "Progression du workflow"));
+
+      const badges = el("div", "hse_badges");
+      badges.appendChild(
+        el("span", `hse_badge ${_workflow_status_badge_class(refStatus.status)}`.trim(), `statut: ${_workflow_status_label(refStatus.status)}`)
+      );
+      if (refStatus.progress_phase) badges.appendChild(el("span", "hse_badge", `phase: ${refStatus.progress_phase}`));
+      if (refStatus.retry_scheduled || refStatus.will_retry) badges.appendChild(el("span", "hse_badge hse_badge_warn", "retry planifié"));
+      if (refStatus.done) badges.appendChild(el("span", "hse_badge hse_badge_status_ok", "terminé"));
+      statusBox.appendChild(badges);
+
+      statusBox.appendChild(el("div", "hse_subtitle", refStatus.progress_label || "Aucun traitement actif."));
+      if (refStatus.attempt || refStatus.attempts_total) {
+        statusBox.appendChild(el("div", "hse_subtitle", `Tentative: ${refStatus.attempt || 0}/${refStatus.attempts_total || "?"}`));
+      }
+      if (refStatus.mapping && typeof refStatus.mapping === "object") {
+        const lines = Object.entries(refStatus.mapping)
+          .filter(([, v]) => !!v)
+          .map(([k, v]) => `${k}: ${v}`);
+        if (lines.length) statusBox.appendChild(el("pre", "hse_code", lines.join("\n")));
+      }
+      if (refStatus.last_error) statusBox.appendChild(el("pre", "hse_code", String(refStatus.last_error)));
+      refCard.appendChild(statusBox);
+    }
+
     const rowRef = el("div", "hse_toolbar");
 
     const selectRef = document.createElement("select");
@@ -591,6 +669,10 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
 
     if (model.message) {
       refCard.appendChild(el("div", "hse_subtitle", model.message));
+    }
+
+    if (model.reference_status_error) {
+      refCard.appendChild(el("pre", "hse_code", String(model.reference_status_error)));
     }
 
     if (model.error) {
@@ -781,7 +863,7 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
 
     let powerDup = 0;
     let energyDup = 0;
-    for (const [gk, items] of by_group.entries()) {
+    for (const [, items] of by_group.entries()) {
       if (!items || items.length <= 1) continue;
       const kind = String(items[0]?.kind || "");
       if (kind === "power") powerDup += 1;
@@ -869,5 +951,5 @@ HSE_MAINTENANCE: If you change UI semantics here, update the doc above.
     container.appendChild(costCard);
   }
 
-  window.hse_config_view = { render_config, _current_reference_entity_id };
+  window.hse_config_view = { render_config, _current_reference_entity_id, _reference_status_from_catalogue };
 })();
