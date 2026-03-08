@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
+const build_signature = "2026-03-08_0944_reference_total_polling";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.26";
+  const ASSET_V = "0.1.27";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -71,6 +71,8 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
         catalogue: null,
         current_reference_entity_id: null,
         selected_reference_entity_id: null,
+        reference_status: null,
+        reference_status_error: null,
         pricing: null,
         pricing_defaults: null,
         pricing_draft: null,
@@ -104,10 +106,13 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
       };
 
       this._render_raf_scheduled = false;
+      this._reference_status_timer = null;
+      this._reference_status_polling = false;
     }
 
     disconnectedCallback() {
       this._clear_overview_autorefresh();
+      this._clear_reference_status_polling();
     }
 
     set hass(hass) {
@@ -248,6 +253,52 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
       }
       this._overview_timer = null;
       this._overview_refreshing = false;
+    }
+
+    _reference_effective_entity_id() {
+      return this._config_state.selected_reference_entity_id || this._config_state.current_reference_entity_id || null;
+    }
+
+    _clear_reference_status_polling() {
+      if (this._reference_status_timer) {
+        try {
+          window.clearInterval(this._reference_status_timer);
+        } catch (_) {}
+      }
+      this._reference_status_timer = null;
+      this._reference_status_polling = false;
+    }
+
+    _ensure_reference_status_polling() {
+      if (this._reference_status_timer) return;
+      if (!this._hass || !window.hse_config_api?.get_reference_total_status) return;
+
+      const tick = async () => {
+        await this._fetch_reference_status();
+      };
+
+      this._reference_status_timer = window.setInterval(tick, 4000);
+      tick();
+    }
+
+    async _fetch_reference_status(for_entity_id) {
+      if (!this._hass || !window.hse_config_api?.get_reference_total_status) return null;
+      if (this._reference_status_polling) return this._config_state.reference_status;
+
+      this._reference_status_polling = true;
+      try {
+        const entity_id = for_entity_id === undefined ? this._reference_effective_entity_id() : for_entity_id;
+        const resp = await window.hse_config_api.get_reference_total_status(this._hass, entity_id);
+        this._config_state.reference_status = resp || null;
+        this._config_state.reference_status_error = null;
+        return resp || null;
+      } catch (err) {
+        this._config_state.reference_status_error = this._err_msg(err);
+        return null;
+      } finally {
+        this._reference_status_polling = false;
+        if (this._active_tab === "config") this._render();
+      }
     }
 
     _ensure_overview_autorefresh() {
@@ -584,6 +635,9 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
       if (this._active_tab !== "overview") {
         this._clear_overview_autorefresh();
       }
+      if (this._active_tab !== "config") {
+        this._clear_reference_status_polling();
+      }
 
       try {
         switch (this._active_tab) {
@@ -712,6 +766,18 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
           this._config_state.selected_reference_entity_id = cur;
         }
 
+        const snapshot = window.hse_config_view._reference_status_from_catalogue?.(
+          cat,
+          this._config_state.selected_reference_entity_id || cur || null
+        );
+        if (snapshot && typeof snapshot === "object") {
+          this._config_state.reference_status = {
+            ...(this._config_state.reference_status || {}),
+            ...snapshot,
+            entity_id: snapshot.entity_id || cur || this._config_state.selected_reference_entity_id || null,
+          };
+        }
+
         // IMPORTANT: do not create pricing_draft from catalogue load (race with fetch_pricing on initial load)
         if (this._config_state.pricing_draft && _remove_ref_from_cost()) {
           this._config_state.pricing_message = "Garde-fou: le capteur de référence a été retiré des capteurs de calcul.";
@@ -802,6 +868,8 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
 
           const pricingResp = await window.hse_config_api.fetch_pricing(this._hass);
           _update_from_pricing(pricingResp);
+
+          await this._fetch_reference_status();
         } catch (err) {
           this._config_state.error = this._err_msg(err);
         } finally {
@@ -810,6 +878,8 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
         }
         return;
       }
+
+      this._ensure_reference_status_polling();
 
       window.hse_config_view.render_config(container, this._config_state, async (action, value) => {
         const _deep_set = (obj, path, v) => {
@@ -864,6 +934,8 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
         if (action === "select_reference") {
           this._config_state.selected_reference_entity_id = value;
           this._config_state.message = null;
+          this._config_state.reference_status_error = null;
+          await this._fetch_reference_status(value || null);
           return;
         }
 
@@ -1049,6 +1121,7 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
           this._config_state.message = null;
           this._config_state.pricing_error = null;
           this._config_state.pricing_message = null;
+          this._config_state.reference_status_error = null;
           this._render();
 
           try {
@@ -1064,6 +1137,8 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
 
             const pricingResp = await window.hse_config_api.fetch_pricing(this._hass);
             _update_from_pricing(pricingResp);
+
+            await this._fetch_reference_status();
           } catch (err) {
             this._config_state.error = this._err_msg(err);
           } finally {
@@ -1080,6 +1155,7 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
           this._config_state.saving = true;
           this._config_state.error = null;
           this._config_state.message = null;
+          this._config_state.reference_status_error = null;
           this._render();
 
           try {
@@ -1087,6 +1163,8 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
             const cat = await window.hse_config_api.fetch_catalogue(this._hass);
             _update_from_catalogue(cat);
             this._config_state.selected_reference_entity_id = null;
+            this._config_state.reference_status = null;
+            await this._fetch_reference_status(null);
             this._config_state.message = "Référence supprimée.";
           } catch (err) {
             this._config_state.error = this._err_msg(err);
@@ -1118,6 +1196,7 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
           this._config_state.saving = true;
           this._config_state.error = null;
           this._config_state.message = null;
+          this._config_state.reference_status_error = null;
           this._render();
 
           try {
@@ -1130,6 +1209,7 @@ const build_signature = "2026-03-05_1535_org_edit_rooms_assign";
 
             const cat = await window.hse_config_api.fetch_catalogue(this._hass);
             _update_from_catalogue(cat);
+            await this._fetch_reference_status(entity_id);
             this._config_state.message = "Référence sauvegardée.";
           } catch (err) {
             this._config_state.error = this._err_msg(err);
