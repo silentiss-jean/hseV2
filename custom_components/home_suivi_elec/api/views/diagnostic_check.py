@@ -8,6 +8,9 @@ from homeassistant.helpers import entity_registry as er
 from ...const import API_PREFIX, DOMAIN
 
 
+HISTORICAL_POLICIES = {"removed", "archived"}
+
+
 def _admin_only(request) -> bool:
     user = request.get("hass_user")
     return bool(user and getattr(user, "is_admin", False))
@@ -17,6 +20,19 @@ def _norm_list(value) -> list[str]:
     if not isinstance(value, list):
         return []
     return [x for x in value if isinstance(x, str) and x]
+
+
+def _triage_policy(row: dict | None) -> str:
+    triage = (row or {}).get("triage") or {}
+    return str(triage.get("policy") or "normal").strip().lower() or "normal"
+
+
+def _is_historical_row(row: dict | None) -> bool:
+    return _triage_policy(row) in HISTORICAL_POLICIES
+
+
+def _operational_rows(rows: list[dict]) -> list[dict]:
+    return [row for row in rows if not _is_historical_row(row)]
 
 
 def _iter_catalogue_items_for_entity(catalogue: dict | None, entity_id: str) -> list[dict]:
@@ -99,14 +115,13 @@ def _pick_current_item(rows: list[dict], active_entries: list[dict]) -> tuple[di
 
     def sort_key(row: dict):
         src = row.get("source") or {}
-        triage = row.get("triage") or {}
         entry_id = src.get("config_entry_id")
         last_seen_at = str(src.get("last_seen_at") or "")
-        is_removed = triage.get("policy") == "removed"
+        is_historical = _is_historical_row(row)
         has_active_entry = entry_id in active_ids
         return (
             1 if has_active_entry else 0,
-            0 if is_removed else 1,
+            0 if is_historical else 1,
             last_seen_at,
             str(row.get("item_id") or ""),
         )
@@ -117,10 +132,19 @@ def _pick_current_item(rows: list[dict], active_entries: list[dict]) -> tuple[di
 
     if current_entry_id in active_ids:
         return current, "latest_last_seen_at_and_active_config_entry"
-    return current, "latest_last_seen_at"
+    if not _is_historical_row(current):
+        return current, "latest_last_seen_at_operational"
+    return current, "latest_last_seen_at_historical"
 
 
-def _reason_code_for_entity(*, rows: list[dict], active_entries: list[dict], state_exists: bool, state_value: str | None) -> tuple[str, str, str]:
+def _reason_code_for_entity(
+    *,
+    rows: list[dict],
+    operational_rows: list[dict],
+    active_entries: list[dict],
+    state_exists: bool,
+    state_value: str | None,
+) -> tuple[str, str, str]:
     if not rows:
         return (
             "entity_missing_but_catalogue_absent",
@@ -128,25 +152,25 @@ def _reason_code_for_entity(*, rows: list[dict], active_entries: list[dict], sta
             "Aucun item catalogue trouvé pour cette entité.",
         )
 
-    if len(rows) > 1 and len(active_entries) == 1:
+    if len(operational_rows) > 1 and len(active_entries) == 1:
         return (
             "historical_catalogue_duplicates",
             "warning",
-            "Plusieurs items catalogue partagent le même source.entity_id, mais une seule config entry active semble encore exister.",
+            "Plusieurs lignes catalogue opérationnelles partagent le même source.entity_id, mais une seule config entry active semble encore exister.",
         )
 
-    if len(rows) > 1 and len(active_entries) > 1:
+    if len(operational_rows) > 1 and len(active_entries) > 1:
         return (
             "multiple_live_helpers",
             "error",
-            "Plusieurs items catalogue et plusieurs config entries actives semblent coexister pour la même entité logique.",
+            "Plusieurs lignes catalogue opérationnelles et plusieurs config entries actives semblent coexister pour la même entité logique.",
         )
 
-    if len(rows) == 1 and not state_exists:
+    if len(operational_rows) == 1 and not state_exists:
         return (
             "entity_missing_but_catalogue_present",
             "warning",
-            "Le catalogue contient un item, mais l'entité n'est plus visible dans Home Assistant.",
+            "Le catalogue contient un item opérationnel, mais l'entité n'est plus visible dans Home Assistant.",
         )
 
     if state_exists and str(state_value or "").lower() in ("unknown", "unavailable"):
@@ -159,7 +183,7 @@ def _reason_code_for_entity(*, rows: list[dict], active_entries: list[dict], sta
     return (
         "no_issue",
         "ok",
-        "Aucune incohérence évidente détectée pour cette entité.",
+        "Aucune incohérence évidente détectée; les lignes removed/archived sont traitées comme de l'historique.",
     )
 
 
@@ -213,11 +237,13 @@ class DiagnosticCheckView(HomeAssistantView):
             state_value = state_obj.state if state_obj else None
 
             rows = _iter_catalogue_items_for_entity(catalogue, entity_id)
-            active_entries = _find_active_config_entries(hass, rows)
+            operational_rows = _operational_rows(rows)
+            active_entries = _find_active_config_entries(hass, operational_rows)
             current_item, selection_reason = _pick_current_item(rows, active_entries)
 
             reason_code, status, explanation = _reason_code_for_entity(
                 rows=rows,
+                operational_rows=operational_rows,
                 active_entries=active_entries,
                 state_exists=state_exists,
                 state_value=state_value,
@@ -231,21 +257,33 @@ class DiagnosticCheckView(HomeAssistantView):
             if reason_code != "no_issue":
                 found_reason_codes.add(reason_code)
 
+            historical_rows = [row for row in rows if _is_historical_row(row)]
+            archived_items = sum(1 for row in rows if _triage_policy(row) == "archived")
+            removed_items = sum(1 for row in rows if _triage_policy(row) == "removed")
+            operational_count = len(operational_rows)
+
+            current_id = current_item.get("item_id") if current_item else None
+            archivable_item_ids = [
+                row.get("item_id")
+                for row in operational_rows
+                if row.get("item_id") and row.get("item_id") != current_id
+            ]
+
             historical_items = []
             if include_history and current_item is not None:
-                current_id = current_item.get("item_id")
                 for row in rows:
                     if row.get("item_id") == current_id:
                         continue
+                    triage_policy = _triage_policy(row)
                     historical_items.append(
                         {
                             "item_id": row.get("item_id"),
                             "unique_id": (row.get("source") or {}).get("unique_id"),
                             "config_entry_id": (row.get("source") or {}).get("config_entry_id"),
                             "last_seen_at": (row.get("source") or {}).get("last_seen_at"),
-                            "triage_policy": (row.get("triage") or {}).get("policy"),
+                            "triage_policy": triage_policy,
                             "escalation": (row.get("health") or {}).get("escalation"),
-                            "state": "historical",
+                            "state": triage_policy if triage_policy in HISTORICAL_POLICIES else "historical",
                         }
                     )
 
@@ -265,9 +303,6 @@ class DiagnosticCheckView(HomeAssistantView):
                 if (row.get("source") or {}).get("integration_domain")
             }
 
-            removed_items = sum(1 for row in rows if (row.get("triage") or {}).get("policy") == "removed")
-            normal_items = sum(1 for row in rows if (row.get("triage") or {}).get("policy") != "removed")
-
             result = {
                 "entity_id": entity_id,
                 "status": status,
@@ -276,8 +311,11 @@ class DiagnosticCheckView(HomeAssistantView):
                 "counts": {
                     "catalogue_items_for_entity": len(rows),
                     "active_config_entries": len(active_entries),
+                    "operational_items": operational_count,
+                    "historical_items": len(historical_rows),
                     "removed_items": removed_items,
-                    "normal_items": normal_items,
+                    "archived_items": archived_items,
+                    "normal_items": operational_count,
                 },
                 "entity_presence": {
                     "state_exists": state_exists,
@@ -296,12 +334,13 @@ class DiagnosticCheckView(HomeAssistantView):
                 },
                 "next_step": {
                     "kind": "explain_only",
-                    "safe_to_auto_fix": reason_code == "historical_catalogue_duplicates",
+                    "safe_to_auto_fix": reason_code == "historical_catalogue_duplicates" and bool(archivable_item_ids),
                     "recommended_action": (
                         "consolidate_catalogue_history"
-                        if reason_code == "historical_catalogue_duplicates"
+                        if reason_code == "historical_catalogue_duplicates" and archivable_item_ids
                         else None
                     ),
+                    "archive_item_ids": archivable_item_ids,
                 },
             }
 

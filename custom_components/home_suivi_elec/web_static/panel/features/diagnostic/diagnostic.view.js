@@ -1,419 +1,347 @@
+/* diagnostic.view.js */
 (function () {
-  function _fmt_dt(ts) {
-    try {
-      const d = new Date(ts);
-      return d.toLocaleString();
-    } catch (_) {
-      return ts;
+  const dom = () => window.hse_dom || {};
+
+  function _el(tag, cls, text) {
+    return dom().el(tag, cls, text);
+  }
+
+  function _clear(node) {
+    return dom().clear(node);
+  }
+
+  function _triage_policy(item) {
+    return String(((item || {}).triage || {}).policy || "normal").trim().toLowerCase() || "normal";
+  }
+
+  function _escalation(item) {
+    return String(((item || {}).health || {}).escalation || "none").trim().toLowerCase() || "none";
+  }
+
+  function _parse_ts(value) {
+    if (!value) return null;
+    const ms = Date.parse(String(value));
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  function _is_active_muted(item) {
+    const mute_until = ((item || {}).triage || {}).mute_until;
+    const ts = _parse_ts(mute_until);
+    return ts != null && ts > Date.now();
+  }
+
+  function _is_alert_item(item) {
+    const policy = _triage_policy(item);
+    if (policy === "removed" || policy === "archived") return false;
+    if (_is_active_muted(item)) return false;
+    return _escalation(item) !== "none";
+  }
+
+  function _item_search_blob(item) {
+    const src = (item || {}).source || {};
+    const triage = (item || {}).triage || {};
+    return [
+      item?.id,
+      src.entity_id,
+      src.unique_id,
+      src.config_entry_id,
+      src.device_id,
+      src.platform,
+      src.integration_domain,
+      triage.note,
+      (item?.health || {}).reason,
+      (item?.health || {}).escalation,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  }
+
+  function _matches_query(item, q) {
+    const needle = String(q || "").trim().toLowerCase();
+    if (!needle) return true;
+    return _item_search_blob(item).includes(needle);
+  }
+
+  function _filtered_escalated_items(data, q) {
+    const itemsObj = (data || {}).items || {};
+    const items = Object.entries(itemsObj)
+      .filter(([, item]) => item && typeof item === "object")
+      .map(([id, item]) => ({ ...item, id }));
+
+    return items
+      .filter((item) => _is_alert_item(item) && _matches_query(item, q))
+      .sort((a, b) => {
+        const ea = _escalation(a);
+        const eb = _escalation(b);
+        const rank = { error: 3, warning: 2, info: 1, none: 0 };
+        const diff = (rank[eb] || 0) - (rank[ea] || 0);
+        if (diff) return diff;
+        const ae = String((a.source || {}).entity_id || "");
+        const be = String((b.source || {}).entity_id || "");
+        return ae.localeCompare(be) || String(a.id || "").localeCompare(String(b.id || ""));
+      });
+  }
+
+  function _group_escalated_items(items) {
+    const map = new Map();
+    for (const item of items || []) {
+      const entity_id = (item.source || {}).entity_id || "(sans entity_id)";
+      const cur = map.get(entity_id) || { entity_id, items: [] };
+      cur.items.push(item);
+      map.set(entity_id, cur);
     }
+
+    return Array.from(map.values())
+      .map((group) => ({
+        ...group,
+        count: group.items.length,
+      }))
+      .sort((a, b) => a.entity_id.localeCompare(b.entity_id));
   }
 
   function _local_iso_days_from_now(days) {
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-
+    const dd = new Date();
+    dd.setDate(dd.getDate() + Number(days || 0));
     const pad = (n) => String(n).padStart(2, "0");
-
-    const yyyy = d.getFullYear();
-    const mm = pad(d.getMonth() + 1);
-    const dd = pad(d.getDate());
-    const hh = pad(d.getHours());
-    const mi = pad(d.getMinutes());
-    const ss = pad(d.getSeconds());
-
-    const tzMin = -d.getTimezoneOffset();
+    const yyyy = dd.getFullYear();
+    const mm = pad(dd.getMonth() + 1);
+    const da = pad(dd.getDate());
+    const hh = pad(dd.getHours());
+    const mi = pad(dd.getMinutes());
+    const ss = pad(dd.getSeconds());
+    const tzMin = -dd.getTimezoneOffset();
     const sign = tzMin >= 0 ? "+" : "-";
     const tzAbs = Math.abs(tzMin);
     const tzh = pad(Math.floor(tzAbs / 60));
     const tzm = pad(tzAbs % 60);
-
-    return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}${sign}${tzh}:${tzm}`;
+    return `${yyyy}-${mm}-${da}T${hh}:${mi}:${ss}${sign}${tzh}:${tzm}`;
   }
 
-  function _esc_label(esc) {
-    if (esc === "warning_15m") return "Warning (>=15 min ou not_provided)";
-    if (esc === "error_24h") return "Erreur (>=24h)";
-    if (esc === "action_48h") return "Action requise (>=48h)";
-    return String(esc || "none");
+  function _badge(text, tone) {
+    const span = _el("span", "hse_badge");
+    span.textContent = text;
+    span.dataset.tone = tone || "neutral";
+    return span;
   }
 
-  function _esc_rank(esc) {
-    if (esc === "action_48h") return 3;
-    if (esc === "error_24h") return 2;
-    if (esc === "warning_15m") return 1;
-    return 0;
+  function _button(text, className, onClick) {
+    const btn = _el("button", className || "hse_button", text);
+    btn.addEventListener("click", onClick);
+    return btn;
   }
 
-  function _check_status_label(status) {
-    if (status === "error") return "Erreur";
-    if (status === "warning") return "Warning";
-    return "OK";
-  }
+  function _render_alert_group(card, group, state, on_action) {
+    const title = _el("div", null, group.entity_id);
+    const subtitle = _el("div", "hse_subtitle", `${group.count} alerte(s) visible(s)`);
+    card.appendChild(title);
+    card.appendChild(subtitle);
 
-  function _matches_q(item, q) {
-    if (!q) return true;
-    q = String(q).trim().toLowerCase();
-    if (!q) return true;
+    for (const item of group.items) {
+      const row = _el("div", "hse_card");
+      row.style.marginTop = "10px";
 
-    const src = item.source || {};
-    const parts = [
-      src.entity_id,
-      src.integration_domain,
-      src.platform,
-      src.status,
-      src.status_reason,
-      src.last_seen_state,
-      item.item_id,
-    ]
-      .filter(Boolean)
-      .map((x) => String(x).toLowerCase());
+      const top = _el("div", "hse_toolbar");
+      const left = _el("label", null);
+      left.style.display = "flex";
+      left.style.alignItems = "center";
+      left.style.gap = "8px";
 
-    return parts.some((p) => p.includes(q));
-  }
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!state?.selected?.[item.id];
+      cb.addEventListener("change", () => on_action("select", { item_id: item.id, checked: cb.checked }));
+      left.appendChild(cb);
 
-  function _filtered_escalated_items(catalogue, filter_q) {
-    const items = Object.entries((catalogue && catalogue.items) || {}).map(([id, v]) => ({ id, v }));
+      const src = item.source || {};
+      const main = _el("span", null, `${item.id} · ${src.entity_id || "?"}`);
+      left.appendChild(main);
+      top.appendChild(left);
 
-    const escalated = items
-      .filter((x) => x.v.health && x.v.health.escalation && x.v.health.escalation !== "none")
-      .filter((x) => {
-        if (x.v && typeof x.v === "object") x.v.item_id = x.id;
-        return _matches_q(x.v, filter_q);
-      });
+      const badges = _el("div", "hse_toolbar");
+      badges.appendChild(_badge(_escalation(item), _escalation(item) === "error" ? "danger" : "warn"));
+      badges.appendChild(_badge(_triage_policy(item), _triage_policy(item) === "normal" ? "neutral" : "info"));
+      top.appendChild(badges);
+      row.appendChild(top);
 
-    escalated.sort((a, b) => {
-      const ea = _esc_rank(a.v.health.escalation);
-      const eb = _esc_rank(b.v.health.escalation);
-      if (ea !== eb) return eb - ea;
-      const ta = String(a.v.health.first_unavailable_at || "");
-      const tb = String(b.v.health.first_unavailable_at || "");
-      return ta.localeCompare(tb);
-    });
+      const lines = [
+        src.unique_id ? `unique_id: ${src.unique_id}` : null,
+        src.config_entry_id ? `config_entry: ${src.config_entry_id}` : null,
+        src.last_seen_at ? `last_seen: ${src.last_seen_at}` : null,
+      ].filter(Boolean);
+      row.appendChild(_el("div", "hse_subtitle", lines.join(" · ")));
 
-    return escalated;
-  }
-
-  function _group_escalated_items(items) {
-    const groups = new Map();
-
-    for (const it of items || []) {
-      const item = it?.v || {};
-      const entity_id = item?.source?.entity_id || it?.id || "unknown";
-      const group = groups.get(entity_id) || {
-        group_id: entity_id,
-        entity_id,
-        items: [],
-        item_ids: [],
-        representative: null,
-      };
-
-      group.items.push(it);
-      group.item_ids.push(it.id);
-
-      const current = group.representative;
-      if (!current) {
-        group.representative = it;
-      } else {
-        const curRank = _esc_rank(current?.v?.health?.escalation);
-        const nextRank = _esc_rank(it?.v?.health?.escalation);
-        const curTs = String(current?.v?.health?.first_unavailable_at || "");
-        const nextTs = String(it?.v?.health?.first_unavailable_at || "");
-        if (nextRank > curRank || (nextRank === curRank && nextTs < curTs)) {
-          group.representative = it;
-        }
-      }
-
-      groups.set(entity_id, group);
-    }
-
-    const out = Array.from(groups.values());
-    out.sort((a, b) => {
-      const ea = _esc_rank(a.representative?.v?.health?.escalation);
-      const eb = _esc_rank(b.representative?.v?.health?.escalation);
-      if (ea !== eb) return eb - ea;
-      const ta = String(a.representative?.v?.health?.first_unavailable_at || "");
-      const tb = String(b.representative?.v?.health?.first_unavailable_at || "");
-      return ta.localeCompare(tb);
-    });
-    return out;
-  }
-
-  async function _apply_group_action(group, fn) {
-    for (const item_id of group?.item_ids || []) {
-      await fn(item_id);
+      const actions = _el("div", "hse_toolbar");
+      actions.appendChild(
+        _button("Mute 7j", "hse_button", () =>
+          on_action("mute", { item_id: item.id, mute_until: _local_iso_days_from_now(7) })
+        )
+      );
+      actions.appendChild(
+        _button("Removed", "hse_button", () => on_action("removed", { item_id: item.id }))
+      );
+      row.appendChild(actions);
+      card.appendChild(row);
     }
   }
 
-  function _render_check_results(container, state, el) {
-    if (!state.check_loading && !state.check_error && !state.check_result) return;
+  function _render_check_result(container, state, on_action) {
+    const wrap = _el("div", "hse_card");
+    wrap.appendChild(_el("div", null, "Contrôle de cohérence"));
 
-    const card = el("div", "hse_card");
-    card.appendChild(el("div", null, "Check cohérence"));
-
-    if (state.check_loading) {
-      card.appendChild(el("div", "hse_subtitle", "Analyse en cours…"));
-      container.appendChild(card);
+    if (state?.check_loading) {
+      wrap.appendChild(_el("div", "hse_subtitle", "Analyse en cours…"));
+      container.appendChild(wrap);
       return;
     }
 
-    if (state.check_error) {
-      card.appendChild(el("div", "hse_subtitle", `Erreur: ${state.check_error}`));
-      container.appendChild(card);
+    if (state?.check_error) {
+      wrap.appendChild(_el("div", "hse_subtitle", `Erreur: ${state.check_error}`));
+      container.appendChild(wrap);
       return;
     }
 
-    const summary = state.check_result?.summary || {};
-    const results = Array.isArray(state.check_result?.results) ? state.check_result.results : [];
-    card.appendChild(
-      el(
+    const results = state?.check_result?.results || [];
+    if (!results.length) {
+      wrap.appendChild(_el("div", "hse_subtitle", "Aucun résultat de cohérence pour le moment."));
+      container.appendChild(wrap);
+      return;
+    }
+
+    const summary = state?.check_result?.summary || {};
+    wrap.appendChild(
+      _el(
         "div",
         "hse_subtitle",
-        `Entités vérifiées: ${summary.checked_count || 0} | problèmes: ${summary.issues_found || 0} | warnings: ${summary.warning_count || 0} | erreurs: ${summary.error_count || 0}`
+        `checked=${summary.checked_count || 0} · warnings=${summary.warning_count || 0} · errors=${summary.error_count || 0}`
       )
     );
 
-    if (!results.length) {
-      card.appendChild(el("div", "hse_subtitle", "Aucun résultat."));
-      container.appendChild(card);
-      return;
-    }
+    for (const result of results) {
+      const card = _el("div", "hse_card");
+      card.style.marginTop = "10px";
+      const top = _el("div", "hse_toolbar");
+      top.appendChild(_el("div", null, result.entity_id || "(sans entity_id)"));
+      top.appendChild(_badge(result.status || "ok", result.status === "error" ? "danger" : result.status === "warning" ? "warn" : "success"));
+      card.appendChild(top);
+      card.appendChild(_el("div", "hse_subtitle", `${result.reason_code || "no_issue"} · ${result.explanation || ""}`));
 
-    for (const res of results) {
-      const sub = el("div", "hse_card");
-      sub.appendChild(el("div", null, res.entity_id || "unknown"));
-      sub.appendChild(el("div", "hse_subtitle", `${_check_status_label(res.status)} | ${res.reason_code || "no_issue"}`));
-      if (res.explanation) sub.appendChild(el("div", "hse_subtitle", res.explanation));
-
-      const counts = res.counts || {};
-      sub.appendChild(
-        el(
+      const counts = result.counts || {};
+      card.appendChild(
+        _el(
           "div",
           "hse_subtitle",
-          `Catalogue: ${counts.catalogue_items_for_entity || 0} | config entries actives: ${counts.active_config_entries || 0} | removed: ${counts.removed_items || 0} | normal: ${counts.normal_items || 0}`
+          `items=${counts.catalogue_items_for_entity || 0} · opérationnels=${counts.operational_items || 0} · historiques=${counts.historical_items || 0} · archived=${counts.archived_items || 0} · removed=${counts.removed_items || 0} · active_entries=${counts.active_config_entries || 0}`
         )
       );
 
-      const cur = res.current_item || null;
-      if (cur) {
-        sub.appendChild(
-          el(
+      if (result.current_item) {
+        const current = result.current_item;
+        card.appendChild(
+          _el(
             "div",
             "hse_subtitle",
-            `Courant: ${cur.item_id || "?"} | entry: ${cur.config_entry_id || "?"} | seen: ${_fmt_dt(cur.last_seen_at)} | règle: ${cur.selection_reason || "?"}`
+            `courant: ${current.item_id || "?"} · triage=${current.triage_policy || "normal"} · config_entry=${current.config_entry_id || "-"}`
           )
         );
       }
 
-      const hist = Array.isArray(res.historical_items) ? res.historical_items : [];
+      const hist = Array.isArray(result.historical_items) ? result.historical_items : [];
       if (hist.length) {
-        sub.appendChild(el("div", "hse_subtitle", `Historiques: ${hist.length}`));
-        for (const it of hist) {
-          sub.appendChild(
-            el(
-              "div",
-              "hse_subtitle",
-              `- ${it.item_id || "?"} | entry: ${it.config_entry_id || "?"} | policy: ${it.triage_policy || "normal"} | seen: ${_fmt_dt(it.last_seen_at)}`
-            )
-          );
-        }
+        const histText = hist
+          .map((x) => `${x.item_id}(${x.state || x.triage_policy || "historical"})`)
+          .join(" · ");
+        card.appendChild(_el("div", "hse_subtitle", `historique: ${histText}`));
       }
 
-      const active = Array.isArray(res.active_config_entries) ? res.active_config_entries : [];
-      if (active.length) {
-        sub.appendChild(el("div", "hse_subtitle", `Helpers actifs: ${active.length}`));
-        for (const it of active) {
-          sub.appendChild(
-            el(
-              "div",
-              "hse_subtitle",
-              `- ${it.domain || "?"} | ${it.entry_id || "?"} | ${it.title || ""} | state: ${it.state || "?"}`
-            )
-          );
-        }
+      const archiveIds = Array.isArray(result?.next_step?.archive_item_ids) ? result.next_step.archive_item_ids.filter(Boolean) : [];
+      if (result?.next_step?.safe_to_auto_fix && archiveIds.length) {
+        const actions = _el("div", "hse_toolbar");
+        actions.appendChild(
+          _button("Remettre en cohérence maintenant", "hse_button hse_button_primary", () =>
+            on_action("consolidate_history", {
+              entity_id: result.entity_id,
+              item_ids: archiveIds,
+              current_item_id: result?.current_item?.item_id || null,
+            })
+          )
+        );
+        card.appendChild(actions);
       }
 
-      card.appendChild(sub);
+      wrap.appendChild(card);
     }
 
-    container.appendChild(card);
+    container.appendChild(wrap);
   }
 
-  function render_diagnostic(container, catalogue, state, on_action) {
-    const { el, clear } = window.hse_dom;
-    clear(container);
+  function render_diagnostic(container, data, state, on_action) {
+    _clear(container);
 
-    const header = el("div", "hse_card");
-    header.appendChild(el("div", null, "Diagnostic"));
-    header.appendChild(el("div", "hse_subtitle", "Warnings >=15min (ou not_provided) / Erreurs 24h / Action requise 48h."));
+    const toolbarCard = _el("div", "hse_card");
+    const toolbar = _el("div", "hse_toolbar");
 
-    const toolbar = el("div", "hse_toolbar");
+    const filter = document.createElement("input");
+    filter.type = "search";
+    filter.placeholder = "Filtrer (entity_id, unique_id, item_id…)";
+    filter.value = state?.filter_q || "";
+    filter.addEventListener("change", () => on_action("filter", filter.value));
+    filter.addEventListener("keyup", (ev) => {
+      if (ev.key === "Enter") on_action("filter", filter.value);
+    });
+    toolbar.appendChild(filter);
 
-    const btn_refresh = el("button", "hse_button hse_button_primary", "Refresh catalogue");
-    btn_refresh.addEventListener("click", () => on_action("refresh"));
-    toolbar.appendChild(btn_refresh);
+    toolbar.appendChild(_button("Rafraîchir", "hse_button", () => on_action("refresh")));
+    toolbar.appendChild(_button("Contrôler cohérence", "hse_button hse_button_primary", () => on_action("check_coherence")));
+    toolbar.appendChild(_button("Tout sélectionner", "hse_button", () => on_action("select_all_filtered")));
+    toolbar.appendChild(_button("Aucun", "hse_button", () => on_action("select_none")));
+    toolbar.appendChild(_button("Mute sélection 7j", "hse_button", () => on_action("bulk_mute", { mode: "selection", days: 7 })));
+    toolbar.appendChild(_button("Removed sélection", "hse_button", () => on_action("bulk_removed", { mode: "selection" })));
+    toolbar.appendChild(_button(state?.advanced ? "Debug −" : "Debug +", "hse_button", () => on_action("toggle_advanced")));
 
-    const btn_check = el("button", "hse_button", state.check_loading ? "Check cohérence…" : "Check cohérence");
-    btn_check.addEventListener("click", () => on_action("check_coherence"));
-    toolbar.appendChild(btn_check);
+    toolbarCard.appendChild(toolbar);
+    container.appendChild(toolbarCard);
 
-    const q = el("input", "hse_input");
-    q.type = "text";
-    q.placeholder = "Filtrer (entity_id, integration, status, reason, state)…";
-    q.value = state.filter_q || "";
-    q.addEventListener("input", (ev) => on_action("filter", ev.target.value));
-    toolbar.appendChild(q);
+    const filtered = _filtered_escalated_items(data, state?.filter_q || "");
+    const groups = _group_escalated_items(filtered);
+    const selectedCount = Object.keys(state?.selected || {}).filter((k) => state.selected[k]).length;
 
-    const btn_adv = el("button", "hse_button", state.advanced ? "Advanced: ON" : "Advanced: OFF");
-    btn_adv.addEventListener("click", () => on_action("toggle_advanced"));
-    toolbar.appendChild(btn_adv);
-
-    const btn_sel_all = el("button", "hse_button", "Select all (filtré)");
-    btn_sel_all.addEventListener("click", () => on_action("select_all_filtered"));
-    toolbar.appendChild(btn_sel_all);
-
-    const btn_sel_none = el("button", "hse_button", "Select none");
-    btn_sel_none.addEventListener("click", () => on_action("select_none"));
-    toolbar.appendChild(btn_sel_none);
-
-    const btn_mute7 = el("button", "hse_button", "Mute 7j (sélection)");
-    btn_mute7.addEventListener("click", () => on_action("bulk_mute", { days: 7, mode: "selection" }));
-    toolbar.appendChild(btn_mute7);
-
-    const btn_mute30 = el("button", "hse_button", "Mute 30j (sélection)");
-    btn_mute30.addEventListener("click", () => on_action("bulk_mute", { days: 30, mode: "selection" }));
-    toolbar.appendChild(btn_mute30);
-
-    const btn_removed = el("button", "hse_button", "Mark removed (sélection)");
-    btn_removed.addEventListener("click", () => on_action("bulk_removed", { mode: "selection" }));
-    toolbar.appendChild(btn_removed);
-
-    const btn_mute7f = el("button", "hse_button", "Mute 7j (filtré)");
-    btn_mute7f.addEventListener("click", () => on_action("bulk_mute", { days: 7, mode: "filtered" }));
-    toolbar.appendChild(btn_mute7f);
-
-    const btn_removedf = el("button", "hse_button", "Mark removed (filtré)");
-    btn_removedf.addEventListener("click", () => on_action("bulk_removed", { mode: "filtered" }));
-    toolbar.appendChild(btn_removedf);
-
-    header.appendChild(toolbar);
-    container.appendChild(header);
-
-    const escalated = _filtered_escalated_items(catalogue, state.filter_q);
-    const grouped = _group_escalated_items(escalated);
-
-    const selected_count = Object.keys(state.selected || {}).filter((k) => state.selected[k]).length;
-    const summary = el("div", "hse_card", `Alertes: ${grouped.length} | items catalogue escaladés: ${escalated.length} | sélection: ${selected_count}`);
+    const summary = _el("div", "hse_card");
+    summary.appendChild(_el("div", null, "Alertes actives"));
+    summary.appendChild(_el("div", "hse_subtitle", `visibles=${filtered.length} · groupes=${groups.length} · sélection=${selectedCount}`));
     container.appendChild(summary);
 
-    _render_check_results(container, state, el);
-
-    if (!grouped.length) {
-      container.appendChild(el("div", "hse_card", "Aucune alerte (avec ce filtre)."));
+    if (!groups.length) {
+      const empty = _el("div", "hse_card");
+      empty.appendChild(_el("div", null, "Aucune alerte active"));
+      empty.appendChild(_el("div", "hse_subtitle", "Les items removed, archived, ou encore mute ne remontent plus dans la liste principale."));
+      container.appendChild(empty);
     } else {
-      for (const group of grouped) {
-        const item = group.representative.v;
-        const card = el("div", "hse_card");
-
-        const row = el("div", "hse_toolbar");
-        const cb = el("input");
-        cb.type = "checkbox";
-        cb.checked = group.item_ids.every((id) => !!(state.selected && state.selected[id]));
-        cb.addEventListener("change", async (ev) => {
-          for (const item_id of group.item_ids) {
-            await on_action("select", { item_id, checked: ev.target.checked });
-          }
-        });
-        row.appendChild(cb);
-
-        const title = el("div", null, group.entity_id);
-        title.style.flex = "1";
-        row.appendChild(title);
-        card.appendChild(row);
-
-        const esc = item.health && item.health.escalation;
-        const suffix = group.items.length > 1 ? ` | doublons catalogue: ${group.items.length}` : "";
-        card.appendChild(
-          el(
-            "div",
-            "hse_subtitle",
-            `${_esc_label(esc)}; since: ${_fmt_dt(item.health.first_unavailable_at)}; status: ${(item.source && item.source.status) || "?"}; state: ${(item.source && item.source.last_seen_state) || "?"}; integration: ${(item.source && item.source.integration_domain) || (item.source && item.source.platform) || "?"}${suffix}`
-          )
-        );
-
-        const actions = el("div", "hse_toolbar");
-
-        const b7 = el("button", "hse_button", "Mute 7j");
-        b7.addEventListener("click", async () => {
-          await _apply_group_action(group, async (item_id) => on_action("mute", { item_id, mute_until: _local_iso_days_from_now(7) }));
-        });
-
-        const b30 = el("button", "hse_button", "Mute 30j");
-        b30.addEventListener("click", async () => {
-          await _apply_group_action(group, async (item_id) => on_action("mute", { item_id, mute_until: _local_iso_days_from_now(30) }));
-        });
-
-        const b90 = el("button", "hse_button", "Mute 90j");
-        b90.addEventListener("click", async () => {
-          await _apply_group_action(group, async (item_id) => on_action("mute", { item_id, mute_until: _local_iso_days_from_now(90) }));
-        });
-
-        const brm = el("button", "hse_button", "Mark removed");
-        brm.addEventListener("click", async () => {
-          await _apply_group_action(group, async (item_id) => on_action("removed", { item_id }));
-        });
-
-        actions.appendChild(b7);
-        actions.appendChild(b30);
-        actions.appendChild(b90);
-        actions.appendChild(brm);
-
-        card.appendChild(actions);
+      for (const group of groups) {
+        const card = _el("div", "hse_card");
+        _render_alert_group(card, group, state, on_action);
         container.appendChild(card);
       }
     }
 
-    if (state.advanced) {
-      const adv = el("div", "hse_card");
-      adv.appendChild(el("div", null, "Advanced"));
-      adv.appendChild(el("div", "hse_subtitle", "Dernière requête API (method/path/body) et réponse brute."));
-      const pre = el("pre");
-      pre.style.whiteSpace = "pre-wrap";
-      pre.style.wordBreak = "break-word";
-      const payload = {
-        last_action: state.last_action,
-        last_request: state.last_request,
-        last_response: state.last_response,
-      };
-      pre.textContent = JSON.stringify(payload, null, 2);
-      adv.appendChild(pre);
+    _render_check_result(container, state, on_action);
+
+    if (state?.advanced) {
+      const adv = _el("div", "hse_card");
+      adv.appendChild(_el("div", null, "Debug"));
+      adv.appendChild(_el("pre", "hse_code", JSON.stringify({
+        last_action: state?.last_action || null,
+        last_request: state?.last_request || null,
+        last_response: state?.last_response || null,
+      }, null, 2)));
       container.appendChild(adv);
-
-      const adv2 = el("div", "hse_card");
-      adv2.appendChild(el("div", null, "Commandes utiles (curl)"));
-      const pre2 = el("pre");
-      pre2.style.whiteSpace = "pre-wrap";
-      pre2.style.wordBreak = "break-word";
-      pre2.textContent = [
-        "# 1) Voir toutes les alertes (escalation != none)",
-        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.health.escalation!=\"none\") | {item_id:.key, entity_id:.value.source.entity_id, esc:.value.health.escalation, status:.value.source.status, integration:.value.source.integration_domain}'",
-        "",
-        "# 2) Voir les items removed",
-        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.policy==\"removed\") | {item_id:.key, entity_id:.value.source.entity_id, policy:.value.triage.policy}'",
-        "",
-        "# 3) Voir les items muted (actifs)",
-        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '.items | to_entries[] | select(.value.triage.mute_until!=null) | {item_id:.key, entity_id:.value.source.entity_id, mute_until:.value.triage.mute_until}'",
-        "",
-        "# 4) Voir les doublons par entity_id dans le catalogue",
-        "curl -sS -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8123/api/home_suivi_elec/unified/catalogue | jq '[.items | to_entries[] | {item_id:.key, entity_id:.value.source.entity_id, esc:.value.health.escalation}] | group_by(.entity_id)[] | select(length>1) | {entity_id: .[0].entity_id, count:length, item_ids: map(.item_id)}'",
-      ].join("\n");
-      adv2.appendChild(pre2);
-      container.appendChild(adv2);
     }
-
-    window.hse_diag_view._local_iso_days_from_now = _local_iso_days_from_now;
-    window.hse_diag_view._filtered_escalated_items = _filtered_escalated_items;
-    window.hse_diag_view._group_escalated_items = _group_escalated_items;
   }
 
-  window.hse_diag_view = { render_diagnostic };
+  window.hse_diag_view = {
+    _filtered_escalated_items,
+    _group_escalated_items,
+    _local_iso_days_from_now,
+    render_diagnostic,
+  };
 })();

@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-08_1248_diagnostic_check";
+const build_signature = "2026-03-08_1315_diagnostic_archive_reconcile";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.29";
+  const ASSET_V = "0.1.30";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -1274,6 +1274,12 @@ const build_signature = "2026-03-08_1248_diagnostic_check";
         }
       };
 
+      const _default_check_request = (entity_ids) => ({
+        entity_ids,
+        checks: ["catalogue_duplicates", "config_entry_consistency", "entity_presence", "helper_consistency"],
+        include_history: true,
+      });
+
       if (!this._diag_state.data && !this._diag_state.loading) {
         this._diag_state.loading = true;
         try {
@@ -1389,11 +1395,7 @@ const build_signature = "2026-03-08_1248_diagnostic_check";
 
         if (action === "check_coherence") {
           const entity_ids = _filtered_entity_ids();
-          const req = {
-            entity_ids: entity_ids.length ? entity_ids : _all_entity_ids(),
-            checks: ["catalogue_duplicates", "config_entry_consistency", "entity_presence", "helper_consistency"],
-            include_history: true,
-          };
+          const req = _default_check_request(entity_ids.length ? entity_ids : _all_entity_ids());
 
           this._diag_state.check_loading = true;
           this._diag_state.check_error = null;
@@ -1459,6 +1461,46 @@ const build_signature = "2026-03-08_1248_diagnostic_check";
             body: null,
           });
           this._render();
+          return;
+        }
+
+        if (action === "consolidate_history") {
+          const entity_id = payload?.entity_id;
+          const ids = Array.isArray(payload?.item_ids) ? payload.item_ids.filter(Boolean) : [];
+          if (!entity_id || !ids.length) return;
+
+          const ok = window.confirm(`Archiver ${ids.length} doublon(s) historique(s) pour ${entity_id} ?`);
+          if (!ok) return;
+
+          await _wrap_last("bulk_triage/archived", () => diag_api.bulk_triage(ids, { policy: "archived", note: "auto_consolidated_from_diagnostic" }), {
+            method: "post",
+            path: "home_suivi_elec/unified/catalogue/triage/bulk",
+            body: { item_ids: ids, triage: { policy: "archived", note: "auto_consolidated_from_diagnostic" } },
+          });
+
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue(), {
+            method: "get",
+            path: "home_suivi_elec/unified/catalogue",
+            body: null,
+          });
+
+          const req = _default_check_request([entity_id]);
+          this._diag_state.check_loading = true;
+          this._diag_state.check_error = null;
+          this._render();
+          try {
+            this._diag_state.check_result = await _wrap_last("diagnostic_check", () => diag_api.check_consistency(req), {
+              method: "post",
+              path: "home_suivi_elec/unified/diagnostic/check",
+              body: req,
+            });
+            this._diag_state.check_error = null;
+          } catch (err) {
+            this._diag_state.check_error = this._err_msg(err);
+          } finally {
+            this._diag_state.check_loading = false;
+            this._render();
+          }
           return;
         }
 
