@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-08_0944_reference_total_polling";
+const build_signature = "2026-03-08_0958_reference_total_queue";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.27";
+  const ASSET_V = "0.1.28";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -108,6 +108,7 @@ const build_signature = "2026-03-08_0944_reference_total_polling";
       this._render_raf_scheduled = false;
       this._reference_status_timer = null;
       this._reference_status_polling = false;
+      this._reference_status_target_entity_id = undefined;
     }
 
     disconnectedCallback() {
@@ -267,6 +268,7 @@ const build_signature = "2026-03-08_0944_reference_total_polling";
       }
       this._reference_status_timer = null;
       this._reference_status_polling = false;
+      this._reference_status_target_entity_id = undefined;
     }
 
     _ensure_reference_status_polling() {
@@ -283,15 +285,32 @@ const build_signature = "2026-03-08_0944_reference_total_polling";
 
     async _fetch_reference_status(for_entity_id) {
       if (!this._hass || !window.hse_config_api?.get_reference_total_status) return null;
+
+      const requested_entity_id = for_entity_id === undefined ? this._reference_effective_entity_id() : for_entity_id;
+      this._reference_status_target_entity_id = requested_entity_id;
+
       if (this._reference_status_polling) return this._config_state.reference_status;
 
       this._reference_status_polling = true;
       try {
-        const entity_id = for_entity_id === undefined ? this._reference_effective_entity_id() : for_entity_id;
-        const resp = await window.hse_config_api.get_reference_total_status(this._hass, entity_id);
-        this._config_state.reference_status = resp || null;
-        this._config_state.reference_status_error = null;
-        return resp || null;
+        while (true) {
+          const entity_id = this._reference_status_target_entity_id;
+          const resp = await window.hse_config_api.get_reference_total_status(this._hass, entity_id);
+
+          if (this._reference_status_target_entity_id !== entity_id) {
+            continue;
+          }
+
+          const effective_entity_id = this._reference_effective_entity_id();
+          if (effective_entity_id !== entity_id) {
+            this._reference_status_target_entity_id = effective_entity_id;
+            continue;
+          }
+
+          this._config_state.reference_status = resp || null;
+          this._config_state.reference_status_error = null;
+          return resp || null;
+        }
       } catch (err) {
         this._config_state.reference_status_error = this._err_msg(err);
         return null;
@@ -935,7 +954,14 @@ const build_signature = "2026-03-08_0944_reference_total_polling";
           this._config_state.selected_reference_entity_id = value;
           this._config_state.message = null;
           this._config_state.reference_status_error = null;
-          await this._fetch_reference_status(value || null);
+
+          const next_effective_entity_id = value || this._config_state.current_reference_entity_id || null;
+          if ((this._config_state.reference_status?.entity_id || null) !== next_effective_entity_id) {
+            this._config_state.reference_status = null;
+          }
+
+          this._render();
+          await this._fetch_reference_status(value || undefined);
           return;
         }
 
