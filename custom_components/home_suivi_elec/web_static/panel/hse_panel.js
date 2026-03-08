@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-08_0958_reference_total_queue";
+const build_signature = "2026-03-08_1248_diagnostic_check";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.28";
+  const ASSET_V = "0.1.29";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -50,6 +50,9 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
         last_request: null,
         last_response: null,
         last_action: null,
+        check_loading: false,
+        check_error: null,
+        check_result: null,
       };
 
       this._migration_state = {
@@ -398,7 +401,6 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
         this._org_state.meta_store = resp?.meta_store || null;
         this._org_state.error = null;
 
-        // Only refresh draft automatically when the user has not edited it.
         if (!this._org_state.dirty) {
           this._org_reset_draft_from_store();
         } else {
@@ -551,7 +553,6 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/diagnostic/diagnostic.api.js?v=${ASSET_V}`);
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/diagnostic/diagnostic.view.js?v=${ASSET_V}`);
 
-        // Enrich API is still used (auto-create helpers after save), but tab is hidden.
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/enrich/enrich.api.js?v=${ASSET_V}`);
 
         await window.hse_loader.load_script_once(`${PANEL_BASE}/features/migration/migration.api.js?v=${ASSET_V}`);
@@ -591,7 +592,6 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
     _get_nav_items() {
       const from_shell = window.hse_shell?.get_nav_items?.();
       const items = Array.isArray(from_shell) && from_shell.length ? from_shell : NAV_ITEMS_FALLBACK;
-      // Enrichissement is intentionally hidden (auto-run from Configuration save).
       return items.filter((x) => x && x.id !== "enrich");
     }
 
@@ -797,7 +797,6 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
           };
         }
 
-        // IMPORTANT: do not create pricing_draft from catalogue load (race with fetch_pricing on initial load)
         if (this._config_state.pricing_draft && _remove_ref_from_cost()) {
           this._config_state.pricing_message = "Garde-fou: le capteur de référence a été retiré des capteurs de calcul.";
         }
@@ -998,7 +997,6 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
 
           const ids = _cost_ids();
 
-          // Duplicate group guardrail
           const idx = _candidate_index();
           const cand = idx.get(eid);
           const gk = _group_key_for_candidate(cand);
@@ -1075,13 +1073,11 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
             return;
           }
 
-          // Set UI to waiting state BEFORE the blocking confirm(), so the user sees immediate feedback.
           this._config_state.pricing_saving = true;
           this._config_state.pricing_error = null;
           this._config_state.pricing_message = "Sauvegarde en préparation…";
           this._render();
 
-          // Give the browser one frame to paint the new state.
           await new Promise((resolve) => {
             try {
               window.requestAnimationFrame(() => resolve());
@@ -1262,12 +1258,13 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
         refresh_catalogue: () => window.hse_diag_api.refresh_catalogue(this._hass),
         set_item_triage: (item_id, triage) => window.hse_diag_api.set_item_triage(this._hass, item_id, triage),
         bulk_triage: (item_ids, triage) => window.hse_diag_api.bulk_triage(this._hass, item_ids, triage),
+        check_consistency: (payload) => this._hass.callApi("post", "home_suivi_elec/unified/diagnostic/check", payload),
       };
 
-      const _wrap_last = async (label, fn) => {
+      const _wrap_last = async (label, fn, request_meta) => {
         try {
           this._diag_state.last_action = label;
-          this._diag_state.last_request = null;
+          this._diag_state.last_request = request_meta || null;
           const resp = await fn();
           this._diag_state.last_response = resp;
           return resp;
@@ -1280,7 +1277,11 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
       if (!this._diag_state.data && !this._diag_state.loading) {
         this._diag_state.loading = true;
         try {
-          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue(), {
+            method: "get",
+            path: "home_suivi_elec/unified/catalogue",
+            body: null,
+          });
           this._diag_state.error = null;
         } catch (err) {
           this._diag_state.error = this._err_msg(err);
@@ -1328,6 +1329,23 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
         return fn(this._diag_state.data, this._diag_state.filter_q).map((x) => x.id);
       };
 
+      const _filtered_entity_ids = () => {
+        const filtered = window.hse_diag_view?._filtered_escalated_items?.(this._diag_state.data, this._diag_state.filter_q) || [];
+        const grouped = window.hse_diag_view?._group_escalated_items?.(filtered) || [];
+        return grouped.map((g) => g.entity_id).filter(Boolean);
+      };
+
+      const _all_entity_ids = () => {
+        const items = this._diag_state.data?.items || {};
+        return Array.from(
+          new Set(
+            Object.values(items)
+              .map((x) => x?.source?.entity_id)
+              .filter(Boolean)
+          )
+        ).sort();
+      };
+
       window.hse_diag_view.render_diagnostic(container, this._diag_state.data, this._diag_state, async (action, payload) => {
         if (action === "toggle_advanced") {
           this._diag_state.advanced = !this._diag_state.advanced;
@@ -1369,6 +1387,34 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
           return;
         }
 
+        if (action === "check_coherence") {
+          const entity_ids = _filtered_entity_ids();
+          const req = {
+            entity_ids: entity_ids.length ? entity_ids : _all_entity_ids(),
+            checks: ["catalogue_duplicates", "config_entry_consistency", "entity_presence", "helper_consistency"],
+            include_history: true,
+          };
+
+          this._diag_state.check_loading = true;
+          this._diag_state.check_error = null;
+          this._render();
+
+          try {
+            this._diag_state.check_result = await _wrap_last("diagnostic_check", () => diag_api.check_consistency(req), {
+              method: "post",
+              path: "home_suivi_elec/unified/diagnostic/check",
+              body: req,
+            });
+            this._diag_state.check_error = null;
+          } catch (err) {
+            this._diag_state.check_error = this._err_msg(err);
+          } finally {
+            this._diag_state.check_loading = false;
+            this._render();
+          }
+          return;
+        }
+
         if (action === "bulk_mute") {
           const mode = payload?.mode || "selection";
           const ids = mode === "filtered" ? _filtered_ids() : _selected_ids();
@@ -1380,8 +1426,16 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
           const ok = window.confirm(`Appliquer MUTE ${days}j sur ${ids.length} item(s) (${mode}) ?`);
           if (!ok) return;
 
-          await _wrap_last("bulk_triage/mute", () => diag_api.bulk_triage(ids, { mute_until }));
-          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
+          await _wrap_last("bulk_triage/mute", () => diag_api.bulk_triage(ids, { mute_until }), {
+            method: "post",
+            path: "home_suivi_elec/unified/catalogue/triage/bulk",
+            body: { item_ids: ids, triage: { mute_until } },
+          });
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue(), {
+            method: "get",
+            path: "home_suivi_elec/unified/catalogue",
+            body: null,
+          });
           this._render();
           return;
         }
@@ -1394,29 +1448,61 @@ const build_signature = "2026-03-08_0958_reference_total_queue";
           const ok = window.confirm(`Appliquer REMOVED sur ${ids.length} item(s) (${mode}) ?`);
           if (!ok) return;
 
-          await _wrap_last("bulk_triage/removed", () => diag_api.bulk_triage(ids, { policy: "removed" }));
-          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
+          await _wrap_last("bulk_triage/removed", () => diag_api.bulk_triage(ids, { policy: "removed" }), {
+            method: "post",
+            path: "home_suivi_elec/unified/catalogue/triage/bulk",
+            body: { item_ids: ids, triage: { policy: "removed" } },
+          });
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue(), {
+            method: "get",
+            path: "home_suivi_elec/unified/catalogue",
+            body: null,
+          });
           this._render();
           return;
         }
 
         if (action === "refresh") {
-          await _wrap_last("refresh_catalogue", () => diag_api.refresh_catalogue());
-          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
+          await _wrap_last("refresh_catalogue", () => diag_api.refresh_catalogue(), {
+            method: "post",
+            path: "home_suivi_elec/unified/catalogue/refresh",
+            body: {},
+          });
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue(), {
+            method: "get",
+            path: "home_suivi_elec/unified/catalogue",
+            body: null,
+          });
           this._render();
           return;
         }
 
         if (action === "mute") {
-          await _wrap_last("set_item_triage/mute", () => diag_api.set_item_triage(payload.item_id, { mute_until: payload.mute_until }));
-          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
+          await _wrap_last("set_item_triage/mute", () => diag_api.set_item_triage(payload.item_id, { mute_until: payload.mute_until }), {
+            method: "post",
+            path: `home_suivi_elec/unified/catalogue/item/${payload.item_id}/triage`,
+            body: { mute_until: payload.mute_until },
+          });
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue(), {
+            method: "get",
+            path: "home_suivi_elec/unified/catalogue",
+            body: null,
+          });
           this._render();
           return;
         }
 
         if (action === "removed") {
-          await _wrap_last("set_item_triage/removed", () => diag_api.set_item_triage(payload.item_id, { policy: "removed" }));
-          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue());
+          await _wrap_last("set_item_triage/removed", () => diag_api.set_item_triage(payload.item_id, { policy: "removed" }), {
+            method: "post",
+            path: `home_suivi_elec/unified/catalogue/item/${payload.item_id}/triage`,
+            body: { policy: "removed" },
+          });
+          this._diag_state.data = await _wrap_last("fetch_catalogue", () => diag_api.fetch_catalogue(), {
+            method: "get",
+            path: "home_suivi_elec/unified/catalogue",
+            body: null,
+          });
           this._render();
           return;
         }

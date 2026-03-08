@@ -44,6 +44,12 @@
     return 0;
   }
 
+  function _check_status_label(status) {
+    if (status === "error") return "Erreur";
+    if (status === "warning") return "Warning";
+    return "OK";
+  }
+
   function _matches_q(item, q) {
     if (!q) return true;
     q = String(q).trim().toLowerCase();
@@ -138,6 +144,100 @@
     }
   }
 
+  function _render_check_results(container, state, el) {
+    if (!state.check_loading && !state.check_error && !state.check_result) return;
+
+    const card = el("div", "hse_card");
+    card.appendChild(el("div", null, "Check cohérence"));
+
+    if (state.check_loading) {
+      card.appendChild(el("div", "hse_subtitle", "Analyse en cours…"));
+      container.appendChild(card);
+      return;
+    }
+
+    if (state.check_error) {
+      card.appendChild(el("div", "hse_subtitle", `Erreur: ${state.check_error}`));
+      container.appendChild(card);
+      return;
+    }
+
+    const summary = state.check_result?.summary || {};
+    const results = Array.isArray(state.check_result?.results) ? state.check_result.results : [];
+    card.appendChild(
+      el(
+        "div",
+        "hse_subtitle",
+        `Entités vérifiées: ${summary.checked_count || 0} | problèmes: ${summary.issues_found || 0} | warnings: ${summary.warning_count || 0} | erreurs: ${summary.error_count || 0}`
+      )
+    );
+
+    if (!results.length) {
+      card.appendChild(el("div", "hse_subtitle", "Aucun résultat."));
+      container.appendChild(card);
+      return;
+    }
+
+    for (const res of results) {
+      const sub = el("div", "hse_card");
+      sub.appendChild(el("div", null, res.entity_id || "unknown"));
+      sub.appendChild(el("div", "hse_subtitle", `${_check_status_label(res.status)} | ${res.reason_code || "no_issue"}`));
+      if (res.explanation) sub.appendChild(el("div", "hse_subtitle", res.explanation));
+
+      const counts = res.counts || {};
+      sub.appendChild(
+        el(
+          "div",
+          "hse_subtitle",
+          `Catalogue: ${counts.catalogue_items_for_entity || 0} | config entries actives: ${counts.active_config_entries || 0} | removed: ${counts.removed_items || 0} | normal: ${counts.normal_items || 0}`
+        )
+      );
+
+      const cur = res.current_item || null;
+      if (cur) {
+        sub.appendChild(
+          el(
+            "div",
+            "hse_subtitle",
+            `Courant: ${cur.item_id || "?"} | entry: ${cur.config_entry_id || "?"} | seen: ${_fmt_dt(cur.last_seen_at)} | règle: ${cur.selection_reason || "?"}`
+          )
+        );
+      }
+
+      const hist = Array.isArray(res.historical_items) ? res.historical_items : [];
+      if (hist.length) {
+        sub.appendChild(el("div", "hse_subtitle", `Historiques: ${hist.length}`));
+        for (const it of hist) {
+          sub.appendChild(
+            el(
+              "div",
+              "hse_subtitle",
+              `- ${it.item_id || "?"} | entry: ${it.config_entry_id || "?"} | policy: ${it.triage_policy || "normal"} | seen: ${_fmt_dt(it.last_seen_at)}`
+            )
+          );
+        }
+      }
+
+      const active = Array.isArray(res.active_config_entries) ? res.active_config_entries : [];
+      if (active.length) {
+        sub.appendChild(el("div", "hse_subtitle", `Helpers actifs: ${active.length}`));
+        for (const it of active) {
+          sub.appendChild(
+            el(
+              "div",
+              "hse_subtitle",
+              `- ${it.domain || "?"} | ${it.entry_id || "?"} | ${it.title || ""} | state: ${it.state || "?"}`
+            )
+          );
+        }
+      }
+
+      card.appendChild(sub);
+    }
+
+    container.appendChild(card);
+  }
+
   function render_diagnostic(container, catalogue, state, on_action) {
     const { el, clear } = window.hse_dom;
     clear(container);
@@ -151,6 +251,10 @@
     const btn_refresh = el("button", "hse_button hse_button_primary", "Refresh catalogue");
     btn_refresh.addEventListener("click", () => on_action("refresh"));
     toolbar.appendChild(btn_refresh);
+
+    const btn_check = el("button", "hse_button", state.check_loading ? "Check cohérence…" : "Check cohérence");
+    btn_check.addEventListener("click", () => on_action("check_coherence"));
+    toolbar.appendChild(btn_check);
 
     const q = el("input", "hse_input");
     q.type = "text";
@@ -200,6 +304,8 @@
     const selected_count = Object.keys(state.selected || {}).filter((k) => state.selected[k]).length;
     const summary = el("div", "hse_card", `Alertes: ${grouped.length} | items catalogue escaladés: ${escalated.length} | sélection: ${selected_count}`);
     container.appendChild(summary);
+
+    _render_check_results(container, state, el);
 
     if (!grouped.length) {
       container.appendChild(el("div", "hse_card", "Aucune alerte (avec ce filtre)."));
