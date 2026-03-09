@@ -150,8 +150,34 @@
     return _shift_days(d, -diff);
   }
 
-  function _end_of_week(date, startDay) {
-    return _end_of_day(_shift_days(_start_of_week(date, startDay), 6));
+  function _datetime_local_value(date) {
+    const d = new Date(date);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function _datetime_from_local_value(value) {
+    if (!value) return null;
+    const d = new Date(value);
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+
+  function _get_custom_ranges() {
+    const now = new Date();
+    const defaultRefEnd = now;
+    const defaultRefStart = _shift_days(now, -7);
+    const defaultCmpEnd = defaultRefStart;
+    const defaultCmpStart = _shift_days(defaultCmpEnd, -7);
+
+    const refStart = _ls_get("hse_costs_custom_ref_start") || _datetime_local_value(defaultRefStart);
+    const refEnd = _ls_get("hse_costs_custom_ref_end") || _datetime_local_value(defaultRefEnd);
+    const cmpStart = _ls_get("hse_costs_custom_cmp_start") || _datetime_local_value(defaultCmpStart);
+    const cmpEnd = _ls_get("hse_costs_custom_cmp_end") || _datetime_local_value(defaultCmpEnd);
+    return { refStart, refEnd, cmpStart, cmpEnd };
+  }
+
+  function _set_custom_range(key, value) {
+    _ls_set(key, value || "");
   }
 
   function _range_label(start, end) {
@@ -164,32 +190,45 @@
 
     if (preset === "this_week_vs_last_week") {
       const refStart = _start_of_week(now, activeStart);
-      const refEnd = _end_of_week(now, activeStart);
+      const refEnd = new Date(now);
+      const elapsed = refEnd.getTime() - refStart.getTime();
       const cmpStart = _shift_days(refStart, -7);
-      const cmpEnd = _end_of_day(_shift_days(cmpStart, 6));
+      const cmpEnd = new Date(cmpStart.getTime() + elapsed);
       return { reference: [refStart, refEnd], compare: [cmpStart, cmpEnd] };
     }
 
     if (preset === "this_weekend_vs_last_weekend") {
-      const day = now.getDay();
-      const saturdayOffset = (6 - day + 7) % 7;
-      const saturday = _start_of_day(_shift_days(now, saturdayOffset));
-      const sunday = _end_of_day(_shift_days(saturday, 1));
-      const lastSaturday = _shift_days(saturday, -7);
-      const lastSunday = _end_of_day(_shift_days(lastSaturday, 1));
-      return { reference: [saturday, sunday], compare: [lastSaturday, lastSunday] };
+      const jsDay = now.getDay();
+      if (jsDay === 6 || jsDay === 0) {
+        const saturdayOffset = (jsDay - 6 + 7) % 7;
+        const refStart = _start_of_day(_shift_days(now, -saturdayOffset));
+        const refEnd = new Date(now);
+        const elapsed = refEnd.getTime() - refStart.getTime();
+        const cmpStart = _shift_days(refStart, -7);
+        const cmpEnd = new Date(cmpStart.getTime() + elapsed);
+        return { reference: [refStart, refEnd], compare: [cmpStart, cmpEnd] };
+      }
+      const saturdayOffset = (jsDay - 6 + 7) % 7;
+      const refStart = _start_of_day(_shift_days(now, -saturdayOffset));
+      const refEnd = _end_of_day(_shift_days(refStart, 1));
+      const cmpStart = _shift_days(refStart, -7);
+      const cmpEnd = _end_of_day(_shift_days(cmpStart, 1));
+      return { reference: [refStart, refEnd], compare: [cmpStart, cmpEnd] };
     }
 
     if (preset === "custom_periods") {
-      const refStart = _start_of_week(now, activeStart);
-      const refEnd = _end_of_week(now, activeStart);
-      return { reference: [refStart, refEnd], compare: [null, null] };
+      const custom = _get_custom_ranges();
+      return {
+        reference: [_datetime_from_local_value(custom.refStart), _datetime_from_local_value(custom.refEnd)],
+        compare: [_datetime_from_local_value(custom.cmpStart), _datetime_from_local_value(custom.cmpEnd)],
+      };
     }
 
     const todayStart = _start_of_day(now);
-    const todayEnd = _end_of_day(now);
-    const yesterdayStart = _start_of_day(_shift_days(now, -1));
-    const yesterdayEnd = _end_of_day(_shift_days(now, -1));
+    const todayEnd = new Date(now);
+    const elapsed = todayEnd.getTime() - todayStart.getTime();
+    const yesterdayStart = _shift_days(todayStart, -1);
+    const yesterdayEnd = new Date(yesterdayStart.getTime() + elapsed);
     return { reference: [todayStart, todayEnd], compare: [yesterdayStart, yesterdayEnd] };
   }
 
@@ -277,12 +316,18 @@
   }
 
   function _compare_payload(mode, preset, weekMode, customWeekStart) {
-    return {
+    const payload = {
       preset,
       tax_mode: mode,
       week_mode: weekMode,
       custom_week_start: customWeekStart,
     };
+    if (preset === "custom_periods") {
+      const custom = _get_custom_ranges();
+      payload.reference_range = { start: custom.refStart, end: custom.refEnd };
+      payload.compare_range = { start: custom.cmpStart, end: custom.cmpEnd };
+    }
+    return payload;
   }
 
   function _render_compare_block(container, title, currentRow, previousRow, summaryRow, mode) {
@@ -334,6 +379,36 @@
     container.appendChild(grid);
   }
 
+  function _render_custom_period_inputs(container, rerender) {
+    const custom = _get_custom_ranges();
+    const card = el("div", "hse_card hse_card_compact");
+    card.appendChild(el("div", "hse_kpi_title", "Périodes personnalisées"));
+
+    const fields = [
+      ["Référence début", "hse_costs_custom_ref_start", custom.refStart],
+      ["Référence fin", "hse_costs_custom_ref_end", custom.refEnd],
+      ["Comparée début", "hse_costs_custom_cmp_start", custom.cmpStart],
+      ["Comparée fin", "hse_costs_custom_cmp_end", custom.cmpEnd],
+    ];
+
+    for (const [label, key, value] of fields) {
+      const row = el("div", "hse_toolbar");
+      row.appendChild(el("div", "hse_subtitle", label));
+      const input = document.createElement("input");
+      input.type = "datetime-local";
+      input.className = "hse_input";
+      input.value = value || "";
+      input.addEventListener("change", () => {
+        _set_custom_range(key, input.value || "");
+        rerender();
+      });
+      row.appendChild(input);
+      card.appendChild(row);
+    }
+
+    container.appendChild(card);
+  }
+
   async function _render_comparisons(container, dash, mode, rerender, hass) {
     const preset = _preset();
     const weekMode = _week_mode();
@@ -377,6 +452,10 @@
       card.appendChild(wrap);
     }
 
+    if (preset === "custom_periods") {
+      _render_custom_period_inputs(card, rerender);
+    }
+
     card.appendChild(el("div", "hse_subtitle", `Période de référence: ${ranges.reference[0] ? _range_label(ranges.reference[0], ranges.reference[1]) : "—"}`));
     card.appendChild(el("div", "hse_subtitle", `Période à comparer: ${ranges.compare[0] ? _range_label(ranges.compare[0], ranges.compare[1]) : "à définir"}`));
 
@@ -404,8 +483,8 @@
       }
 
       if (resp.supported === false) {
-        body.appendChild(el("div", "hse_kpi_title", "Comparaison partielle"));
-        body.appendChild(el("div", "hse_subtitle", "Ce preset n'est pas encore supporté par le backend actuel sans historique recorder. Utilise aujourd'hui vs hier ou cette semaine vs dernière semaine."));
+        body.appendChild(el("div", "hse_kpi_title", "Comparaison indisponible"));
+        body.appendChild(el("div", "hse_subtitle", "Le backend n'a pas pu résoudre cette comparaison avec les données actuelles."));
         const warns = Array.isArray(resp.warnings) ? resp.warnings : [];
         if (warns.length) {
           body.appendChild(el("pre", "hse_code", warns.join("\n")));
