@@ -26,6 +26,20 @@
     return `${v.toFixed(2)} €`;
   }
 
+  function _fmt_pct(x) {
+    const v = _num(x);
+    if (v == null) return "—";
+    const sign = v > 0 ? "+" : "";
+    return `${sign}${v.toFixed(2)} %`;
+  }
+
+  function _fmt_delta_kwh(x) {
+    const v = _num(x);
+    if (v == null) return "—";
+    const sign = v > 0 ? "+" : "";
+    return `${sign}${v.toFixed(3)} kWh`;
+  }
+
   function _display_mode(pricing) {
     const saved = String(_ls_get("hse_costs_tax_mode") || "").toLowerCase();
     if (saved === "ht" || saved === "ttc") return saved;
@@ -257,7 +271,70 @@
     container.appendChild(list);
   }
 
-  function _render_comparisons(container, dash, mode, rerender) {
+  async function _fetch_compare(hass, payload) {
+    if (!hass?.callApi) throw new Error("hass_unavailable");
+    return hass.callApi("POST", "home_suivi_elec/unified/costs/compare", payload || {});
+  }
+
+  function _compare_payload(mode, preset, weekMode, customWeekStart) {
+    return {
+      preset,
+      tax_mode: mode,
+      week_mode: weekMode,
+      custom_week_start: customWeekStart,
+    };
+  }
+
+  function _render_compare_block(container, title, currentRow, previousRow, summaryRow, mode) {
+    const card = el("div", "hse_card hse_card_compact");
+    card.appendChild(el("div", "hse_kpi_title", title));
+    card.appendChild(_mk_kv("Référence énergie", _fmt_kwh(currentRow?.kwh)));
+    card.appendChild(_mk_kv("Comparée énergie", _fmt_kwh(previousRow?.kwh)));
+    card.appendChild(_mk_kv("Delta énergie", _fmt_delta_kwh(summaryRow?.delta_kwh)));
+    card.appendChild(_mk_kv("Delta énergie %", _fmt_pct(summaryRow?.pct_kwh)));
+    card.appendChild(_mk_kv("Référence total", _fmt_eur(_row_total(currentRow, mode))));
+    card.appendChild(_mk_kv("Comparée total", _fmt_eur(_row_total(previousRow, mode))));
+    card.appendChild(_mk_kv("Delta total", _fmt_eur(mode === "ht" ? summaryRow?.delta_total_ht : summaryRow?.delta_total_ttc)));
+    card.appendChild(_mk_kv("Delta total %", _fmt_pct(mode === "ht" ? summaryRow?.pct_total_ht : summaryRow?.pct_total_ttc)));
+    container.appendChild(card);
+  }
+
+  function _render_compare_lists(container, rows, mode) {
+    const grid = el("div", "hse_grid_2col");
+    const key = mode === "ht" ? "total_ht" : "total_ttc";
+
+    const up = rows
+      .filter((r) => _num(r?.delta?.[key]) != null)
+      .sort((a, b) => (_num(b?.delta?.[key]) || 0) - (_num(a?.delta?.[key]) || 0))
+      .slice(0, 5);
+
+    const down = rows
+      .filter((r) => _num(r?.delta?.[key]) != null)
+      .sort((a, b) => (_num(a?.delta?.[key]) || 0) - (_num(b?.delta?.[key]) || 0))
+      .slice(0, 5);
+
+    const mkList = (title, items) => {
+      const card = el("div", "hse_card hse_card_compact");
+      card.appendChild(el("div", "hse_kpi_title", title));
+      if (!items.length) {
+        card.appendChild(el("div", "hse_subtitle", "Aucune donnée disponible."));
+        return card;
+      }
+      for (const row of items) {
+        const line = el("div", "hse_toolbar");
+        line.appendChild(el("div", null, row?.name || row?.entity_id || "—"));
+        line.appendChild(el("div", "hse_kpi_value", _fmt_eur(row?.delta?.[key])));
+        card.appendChild(line);
+      }
+      return card;
+    };
+
+    grid.appendChild(mkList("Top hausses", up));
+    grid.appendChild(mkList("Top baisses", down));
+    container.appendChild(grid);
+  }
+
+  async function _render_comparisons(container, dash, mode, rerender, hass) {
     const preset = _preset();
     const weekMode = _week_mode();
     const customWeekStart = _custom_week_start();
@@ -303,18 +380,62 @@
     card.appendChild(el("div", "hse_subtitle", `Période de référence: ${ranges.reference[0] ? _range_label(ranges.reference[0], ranges.reference[1]) : "—"}`));
     card.appendChild(el("div", "hse_subtitle", `Période à comparer: ${ranges.compare[0] ? _range_label(ranges.compare[0], ranges.compare[1]) : "à définir"}`));
 
-    const note = el("div", "hse_card hse_card_compact");
-    note.appendChild(el("div", "hse_kpi_title", "Socle v1"));
-    note.appendChild(el("div", "hse_subtitle", "Les bornes de périodes classiques et custom sont en place dans l'UI. La comparaison chiffrée historique sera raccordée ensuite au backend dédié."));
-    note.appendChild(_mk_kv("Vue active", mode.toUpperCase()));
-    note.appendChild(_mk_kv("Référence courante (jour)", _fmt_eur(_row_total(_find_period_row(dash?.cumulative_table, "day"), mode))));
-    note.appendChild(_mk_kv("Référence courante (semaine)", _fmt_eur(_row_total(_find_period_row(dash?.cumulative_table, "week"), mode))));
-    card.appendChild(note);
-
+    const body = el("div", "hse_card hse_card_compact");
+    body.appendChild(el("div", "hse_subtitle", "Chargement des comparaisons…"));
+    card.appendChild(body);
     container.appendChild(card);
+
+    try {
+      const resp = await _fetch_compare(hass, _compare_payload(mode, preset, weekMode, customWeekStart));
+      clear(body);
+
+      const meta = resp?.meta || {};
+      if (meta?.resolved_reference_range?.start && meta?.resolved_reference_range?.end) {
+        body.appendChild(el("div", "hse_subtitle", `Backend référence: ${meta.resolved_reference_range.start} → ${meta.resolved_reference_range.end}`));
+      }
+      if (meta?.resolved_compare_range?.start && meta?.resolved_compare_range?.end) {
+        body.appendChild(el("div", "hse_subtitle", `Backend comparaison: ${meta.resolved_compare_range.start} → ${meta.resolved_compare_range.end}`));
+      }
+
+      if (!resp || resp.ok !== true) {
+        body.appendChild(el("div", "hse_kpi_title", "Erreur"));
+        body.appendChild(el("div", "hse_subtitle", "La comparaison de coûts a échoué."));
+        return;
+      }
+
+      if (resp.supported === false) {
+        body.appendChild(el("div", "hse_kpi_title", "Comparaison partielle"));
+        body.appendChild(el("div", "hse_subtitle", "Ce preset n'est pas encore supporté par le backend actuel sans historique recorder. Utilise aujourd'hui vs hier ou cette semaine vs dernière semaine."));
+        const warns = Array.isArray(resp.warnings) ? resp.warnings : [];
+        if (warns.length) {
+          body.appendChild(el("pre", "hse_code", warns.join("\n")));
+        }
+        return;
+      }
+
+      const summaryGrid = el("div", "hse_grid_2col");
+      _render_compare_block(summaryGrid, "Référence", resp?.reference_period?.reference || {}, resp?.compare_period?.reference || {}, resp?.summary?.reference || {}, mode);
+      _render_compare_block(summaryGrid, "Interne", resp?.reference_period?.internal || {}, resp?.compare_period?.internal || {}, resp?.summary?.internal || {}, mode);
+      _render_compare_block(summaryGrid, "Delta", resp?.reference_period?.delta || {}, resp?.compare_period?.delta || {}, resp?.summary?.delta || {}, mode);
+      body.appendChild(summaryGrid);
+
+      _render_compare_lists(body, Array.isArray(resp?.per_sensor) ? resp.per_sensor : [], mode);
+
+      const warns = Array.isArray(resp?.warnings) ? resp.warnings : [];
+      if (warns.length) {
+        const note = el("div", "hse_card hse_card_compact");
+        note.appendChild(el("div", "hse_kpi_title", "Notes techniques"));
+        note.appendChild(el("pre", "hse_code", warns.join("\n")));
+        body.appendChild(note);
+      }
+    } catch (err) {
+      clear(body);
+      body.appendChild(el("div", "hse_kpi_title", "Erreur comparaison"));
+      body.appendChild(el("div", "hse_subtitle", String(err?.message || err || "compare_failed")));
+    }
   }
 
-  function render_costs(container, data) {
+  function render_costs(container, data, hass) {
     clear(container);
     const dash = data?.dashboard || null;
     if (!dash || dash.ok !== true) {
@@ -328,7 +449,7 @@
     const pricing = dash.pricing || dash.defaults || {};
     const mode = _display_mode(pricing);
     const subtab = _subtab();
-    const rerender = () => render_costs(container, data);
+    const rerender = () => render_costs(container, data, hass);
 
     _render_header(
       container,
@@ -345,7 +466,7 @@
     );
 
     if (subtab === "comparisons") {
-      _render_comparisons(container, dash, mode, rerender);
+      _render_comparisons(container, dash, mode, rerender, hass);
       return;
     }
 

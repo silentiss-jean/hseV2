@@ -9,6 +9,7 @@ from .views.catalogue_item_triage import CatalogueItemTriageView
 from .views.catalogue_reference_total import CatalogueReferenceTotalStatusView, CatalogueReferenceTotalView
 from .views.catalogue_refresh import CatalogueRefreshView
 from .views.catalogue_triage_bulk import CatalogueTriageBulkView
+from .views.costs_compare import CostsCompareView
 from .views.dashboard_overview import DashboardOverviewView
 from .views.diagnostic_check import DiagnosticCheckView
 from .views.enrich_apply import EnrichApplyView
@@ -48,3 +49,4 @@ def async_register_unified_api(hass) -> None:
     hass.http.register_view(DiagnosticCheckView())
     hass.http.register_view(MigrationExportView())
     hass.http.register_view(DashboardOverviewView())
+    hass.http.register_view(CostsCompareView())
