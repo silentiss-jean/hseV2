@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-08_1658_restore_panel_and_costs";
+const build_signature = "2026-03-09_2109_costs_compare_history_cache_bust";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.30";
+  const ASSET_V = "0.1.31";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -848,7 +848,6 @@ const build_signature = "2026-03-08_1658_restore_panel_and_costs";
 
         for (const eid of entity_ids || []) {
           const c = idx.get(eid);
-          if (!c) continue;
           const gk = _group_key_for_candidate(c);
           if (!gk) continue;
 
