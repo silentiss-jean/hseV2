@@ -1,12 +1,12 @@
 /* entrypoint - hse_panel.js */
-const build_signature = "2026-03-09_2109_costs_compare_history_cache_bust";
+const build_signature = "2026-03-10_0711_costs_noflicker_badges_synthesis";
 
 (function () {
   const PANEL_BASE = "/api/home_suivi_elec/static/panel";
   const SHARED_BASE = "/api/home_suivi_elec/static/shared";
 
   // IMPORTANT: must match const.py PANEL_JS_URL
-  const ASSET_V = "0.1.31";
+  const ASSET_V = "0.1.32";
 
   const NAV_ITEMS_FALLBACK = [
     { id: "overview", label: "Accueil" },
@@ -126,6 +126,7 @@ const build_signature = "2026-03-09_2109_costs_compare_history_cache_bust";
       // Otherwise <select> and other inputs close/reset while the user interacts.
       if (this._active_tab === "custom") return;
       if (this._active_tab === "config") return;
+      if (this._active_tab === "costs") return;
 
       this._render();
     }
@@ -818,7 +819,7 @@ const build_signature = "2026-03-09_2109_costs_compare_history_cache_bust";
           this._deep_fill_missing(cur, base);
           this._config_state.pricing_draft = cur;
         } else {
-          this._deep_fill_missing(this._config_state.pricing_draft, defs || {});
+          this._deep_fill_missing(this._config_state.pricing_draft, this._config_state.pricing_defaults || {});
         }
 
         if (_remove_ref_from_cost()) {
