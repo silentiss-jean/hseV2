@@ -163,14 +163,13 @@
   }
 
   // ─── Bloc 2 sous-lignes générique (compteur ref + capteurs) ─────────────────
-  // Utilisé identiquement dans Période et Comparaison.
-  // name       : texte du titre (null = pas de titre, utilisé pour les capteurs)
-  // refKwh/refCost : données période de référence (ou période unique en mode Période)
-  // cmpKwh/cmpCost : données période de comparaison (null en mode Période)
-  // maxCost    : valeur max pour la barre proportionnelle
+  // name       : texte du titre
+  // refKwh/refCost : données période de référence (ligne bleue)
+  // cmpKwh/cmpCost : données période de comparaison (ligne rouge, null = pas de 2e barre/ligne)
+  // maxCost    : valeur max pour les barres proportionnelles
   // labelRef   : libellé ligne 1
-  // labelCmp   : libellé ligne 2 (null = pas de 2e ligne)
-  // isTitle    : true → affiche en tant que bloc compteur (padding plus généreux, taille légèrement plus grande)
+  // labelCmp   : libellé ligne 2 (null = pas de 2e ligne ni 2e barre)
+  // isTitle    : true → bloc compteur (padding plus généreux)
   function _mk_two_line_row({
     name, subtitle,
     refKwh, refCost,
@@ -202,15 +201,36 @@
       }
     }
 
-    // Barre proportionnelle (basée sur refCost)
+    // ── Double barre proportionnelle ─────────────────────────────────────────
     const rc = _num(refCost);
-    if (showBar && rc != null && maxV && maxV > 0) {
-      const pct = Math.min(100, (rc / maxV) * 100);
-      const barTrack = el("div", null);
-      barTrack.style.cssText = "height:3px;background:rgba(128,128,128,0.15);border-radius:2px;margin-bottom:5px;";
-      const barFill = el("div", null);
-      barFill.style.cssText = `height:100%;width:${pct}%;background:var(--primary-color,#4caf50);border-radius:2px;`;
-      barTrack.appendChild(barFill); wrap.appendChild(barTrack);
+    const cc = _num(cmpCost);
+    if (showBar && maxV && maxV > 0) {
+      const barGroup = el("div", null);
+      barGroup.style.cssText = "display:flex;flex-direction:column;gap:2px;margin-bottom:5px;";
+
+      // Barre bleue (période de référence / actuelle)
+      if (rc != null) {
+        const pct = Math.min(100, (rc / maxV) * 100);
+        const track = el("div", null);
+        track.style.cssText = "height:3px;background:rgba(128,128,128,0.15);border-radius:2px;";
+        const fill = el("div", null);
+        fill.style.cssText = `height:100%;width:${pct}%;background:var(--primary-color,#4caf50);border-radius:2px;`;
+        track.appendChild(fill);
+        barGroup.appendChild(track);
+      }
+
+      // Barre rouge (période de comparaison) — uniquement si labelCmp fourni
+      if (cc != null && labelCmp) {
+        const pct2 = Math.min(100, (cc / maxV) * 100);
+        const track2 = el("div", null);
+        track2.style.cssText = "height:3px;background:rgba(128,128,128,0.15);border-radius:2px;";
+        const fill2 = el("div", null);
+        fill2.style.cssText = `height:100%;width:${pct2}%;background:#e74c3c;border-radius:2px;opacity:0.7;`;
+        track2.appendChild(fill2);
+        barGroup.appendChild(track2);
+      }
+
+      wrap.appendChild(barGroup);
     }
 
     // Largeur de l'étiquette (cohérente entre les deux lignes)
@@ -230,7 +250,6 @@
     }
     const c1El = el("span", null, `· ${_fmt_eur(rc)}`); c1El.style.cssText = "opacity:0.8;"; row1.appendChild(c1El);
     // Badge delta (seulement si on a les deux périodes)
-    const cc = _num(cmpCost);
     if (rc != null && cc != null) {
       let dpct = null;
       if (cc !== 0) dpct = ((rc - cc) / Math.abs(cc)) * 100;
@@ -366,7 +385,7 @@
     }
     container.appendChild(ctrl);
 
-    // ── Bloc compteur de référence (même structure que les capteurs) ───────────
+    // ── Bloc compteur de référence ───────────────────────────────────────────
     const hasRef = !!(dash?.reference?.entity_id);
     if (hasRef) {
       const refRow = _find_period_row(dash?.reference_table, periodKey);
@@ -383,9 +402,6 @@
         labelRef: null, labelCmp: null,
         showBar: false, isTitle: true,
       });
-      // En mode Période : affichage direct sans label (pas de 2e période)
-      // On réutilise _mk_two_line_row mais on recrée manuellement la ligne unique
-      // plus lisible avec grande taille
       clear(wrap);
       const valRow = el("div", null); valRow.style.cssText = "display:flex;gap:6px;align-items:baseline;padding:4px 4px 2px;";
       const bigKwh = el("span", null, _fmt_kwh(refKwh)); bigKwh.style.cssText = "font-size:1.3em;font-weight:700;";
@@ -558,7 +574,7 @@
     const summary   = resp.summary          || {};
     const pctKey    = mode === "ht" ? "pct_total_ht" : "pct_total_ttc";
 
-    // ── Bloc compteur de référence — même structure 2 sous-lignes que les capteurs
+    // ── Bloc compteur de référence — double barre bleue/rouge ─────────────────
     const hasRef = !!(dash?.reference?.entity_id);
     if (hasRef) {
       const refCard = el("div", "hse_card");
@@ -569,16 +585,21 @@
       if (refBadge) refHead.appendChild(refBadge);
       refCard.appendChild(refHead);
 
+      const refCostVal = _num(_row_total(refPeriod?.reference, mode));
+      const cmpCostVal = _num(_row_total(cmpPeriod?.reference, mode));
+      // maxCost pour les barres du compteur = max(ref, cmp)
+      const refMaxCost = Math.max(refCostVal || 0, cmpCostVal || 0) || null;
+
       const { wrap: refWrap } = _mk_two_line_row({
         name: null,
         subtitle: "Compteur — valeur réelle totale du foyer",
         refKwh:  _num(refPeriod?.reference?.kwh),
-        refCost: _num(_row_total(refPeriod?.reference, mode)),
+        refCost: refCostVal,
         cmpKwh:  _num(cmpPeriod?.reference?.kwh),
-        cmpCost: _num(_row_total(cmpPeriod?.reference, mode)),
-        maxCost: null,
+        cmpCost: cmpCostVal,
+        maxCost: refMaxCost,
         labelRef: labels.ref, labelCmp: labels.cmp,
-        showBar: false, isTitle: true,
+        showBar: true, isTitle: true,
       });
       refCard.appendChild(refWrap);
 
